@@ -28,7 +28,7 @@ def download_mvtec_from_drive(drive_path=None):
     
     Args:
         drive_path: Google Drive内のMVTec-ADのパス
-                   例: '/content/drive/MyDrive/mvtec_anomaly_detection.zip'
+                   例: '/content/drive/MyDrive/m2/data/mvtec'
     """
     print("📥 MVTec-ADデータセットをダウンロード中...")
     
@@ -44,7 +44,7 @@ def download_mvtec_from_drive(drive_path=None):
                 zip_ref.extractall('data/')
             print("✅ データセットの展開完了")
         else:
-            # フォルダの場合はコピー
+            # フォルダの場合はコピー（内容をmvtec_anomaly_detectionにコピー）
             os.system(f"cp -r '{drive_path}' data/mvtec_anomaly_detection")
             print("✅ データセットのコピー完了")
     else:
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     
     # データセットダウンロード
     # Google Driveのパスを指定（実際のパスに変更してください）
-    drive_path = "/content/drive/MyDrive/mvtec_anomaly_detection.zip"  # 例
+    drive_path = "/content/drive/MyDrive/m2/data/mvtec"  # 例
     download_mvtec_from_drive(drive_path)
     
     # 異常検知実行
