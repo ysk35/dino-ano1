@@ -3,10 +3,10 @@ torchvision
 opencv-python
 matplotlib
 Pillow
-numpy==1.26 # numpy 2.0 not compatible at the moment
+numpy>=2.0,<2.3  # Compatible with opencv-python
 scipy
 scikit-learn
-faiss-gpu
+faiss-gpu-cu12  # CUDA 12.x specific version for Colab
 tqdm
 tifffile
 argparse
