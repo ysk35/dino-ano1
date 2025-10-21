@@ -19,6 +19,66 @@ from bisect import bisect
 from src.utils import dists2map
 
 
+def analyze_folder_errors(binary_labels, predictions, file_paths, threshold=None):
+    """
+    フォルダ別のミス数を分析・表示
+    """
+    import numpy as np
+    from sklearn.metrics import roc_curve
+    
+    # 最適閾値を計算（Youden's J統計量）
+    if threshold is None:
+        fpr, tpr, thresholds = roc_curve(binary_labels, predictions)
+        j_scores = tpr - fpr
+        best_threshold_idx = np.argmax(j_scores)
+        threshold = thresholds[best_threshold_idx]
+    
+    # 予測を二値化
+    binary_predictions = (np.array(predictions) >= threshold).astype(int)
+    
+    # フォルダ別の集計
+    folder_stats = {}
+    
+    for i, (true_label, pred_label, file_path) in enumerate(zip(binary_labels, binary_predictions, file_paths)):
+        # フォルダ名を抽出 (例: "results_*/bottle/test/broken_large/000")
+        path_parts = file_path.split('/')
+        if len(path_parts) >= 3:
+            folder_name = path_parts[-2]  # "broken_large", "good" など
+        else:
+            folder_name = "unknown"
+        
+        if folder_name not in folder_stats:
+            folder_stats[folder_name] = {
+                'total': 0, 'correct': 0, 'false_positive': 0, 'false_negative': 0
+            }
+        
+        folder_stats[folder_name]['total'] += 1
+        
+        if true_label == pred_label:
+            folder_stats[folder_name]['correct'] += 1
+        elif true_label == 0 and pred_label == 1:  # FP: 正常を異常と判定
+            folder_stats[folder_name]['false_positive'] += 1
+        elif true_label == 1 and pred_label == 0:  # FN: 異常を正常と判定
+            folder_stats[folder_name]['false_negative'] += 1
+    
+    # 結果表示
+    print(f"\n📊 フォルダ別エラー分析 (閾値: {threshold:.4f})")
+    print("=" * 60)
+    
+    total_errors = 0
+    for folder, stats in sorted(folder_stats.items()):
+        errors = stats['false_positive'] + stats['false_negative']
+        accuracy = stats['correct'] / stats['total'] * 100
+        total_errors += errors
+        
+        status = "✅" if errors == 0 else "⚠️" if errors <= 2 else "❌"
+        print(f"{status} {folder:15s}: {errors:2d}ミス/{stats['total']:2d}枚 "
+              f"(精度: {accuracy:5.1f}%, FP:{stats['false_positive']}, FN:{stats['false_negative']})")
+    
+    print("=" * 60)
+    print(f"🎯 総エラー数: {total_errors}枚")
+    return folder_stats
+
 
 def parse_dataset_files(object_name, dataset_base_dir, anomaly_maps_dir, dataset="MVTec"):
     """Parse the filenames for one object of the MVTec AD dataset.
@@ -355,6 +415,7 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
     # Read all ground truth and anomaly images.
     ground_truth = []
     predictions = []
+    file_paths = []  # ファイルパス保存用
 
     gt_img_size = []
 
@@ -363,6 +424,7 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
                                      total=len(gt_filenames)):
         prediction = np.load(pred_name + '.npy') 
         predictions.append(prediction)
+        file_paths.append(pred_name)  # ファイルパス保存
 
         if aggregation_statistics == "max_anomaly_map":
             # read in the test image to get the shape of the anomaly map
@@ -404,6 +466,10 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
     f1_clf = np.max(f1_scores[np.isfinite(f1_scores)])
     
     print(f"F1 (image-level): {f1_clf}")
+    
+    # フォルダ別ミス分析を追加
+    analyze_folder_errors(binary_labels, predictions, file_paths)
+    
     return auroc_clf, ap_clf, f1_clf
 
 
