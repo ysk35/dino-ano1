@@ -11,6 +11,45 @@ import torch
 from src.utils import augment_image, dists2map, plot_ref_images
 from src.post_eval import mean_top1p
 
+def two_stage_detection(patch_score, stats_score, object_name):
+    """
+    2段階異常検知
+    
+    Args:
+        patch_score: パッチベースのTop1%スコア
+        stats_score: 統計量ベースのスコア
+        object_name: オブジェクト名
+    
+    Returns:
+        is_anomaly: 異常判定結果 (bool)
+        final_score: 最終スコア (float)
+        detection_method: 検知方法 (str)
+    """
+    
+    # カテゴリ別閾値設定
+    thresholds = {
+        'cable': {'t1': 0.15, 't2': 0.08},      # 積極的Stage2
+        'screw': {'t1': 0.18, 't2': 0.12},      # 標準
+        'capsule': {'t1': 0.16, 't2': 0.10},    # 標準
+        'pill': {'t1': 0.14, 't2': 0.20},       # 保守的Stage2
+        'transistor': {'t1': 0.17, 't2': 0.18}, # 保守的Stage2
+        'default': {'t1': 0.16, 't2': 0.12}
+    }
+    
+    thres = thresholds.get(object_name, thresholds['default'])
+    
+    # Stage 1: パッチベース検知
+    if patch_score > thres['t1']:
+        return True, patch_score, "patch_based"
+    
+    # Stage 2: 統計量による補完検知
+    elif stats_score > thres['t2']:
+        return True, stats_score, "statistics_based"
+    
+    # 正常判定
+    else:
+        return False, max(patch_score, stats_score), "normal"
+
 def run_anomaly_detection(
         model,
         object_name,
@@ -62,6 +101,10 @@ def run_anomaly_detection(
     images_ref = []
     masks_ref = []
     vis_backgroud = []
+    
+    # Extract reference statistics for 2-stage detection
+    stats_ref_mean = []  # 平均ベクトル集合
+    stats_ref_std = []   # 標準偏差ベクトル集合
 
     img_ref_folder = f"{data_root}/{object_name}/train/good/"
     if n_ref_samples == -1:
@@ -94,7 +137,22 @@ def run_anomaly_detection(
                 
                 # compute background mask and discard background patches
                 mask_ref = model.compute_background_mask(features_ref_i, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
-                features_ref.append(features_ref_i[mask_ref])
+                masked_features = features_ref_i[mask_ref]
+                features_ref.append(masked_features)
+                
+                # Compute statistics for 2-stage detection
+                if len(masked_features) > 0:  # マスクされたパッチが存在する場合のみ
+                    # 統計量計算
+                    patch_mean = masked_features.mean(axis=0)  # 全体平均特徴
+                    patch_std = masked_features.std(axis=0)    # 全体ばらつき特徴
+                    
+                    # L2正規化
+                    patch_mean = patch_mean / (np.linalg.norm(patch_mean) + 1e-8)
+                    patch_std = patch_std / (np.linalg.norm(patch_std) + 1e-8)
+                    
+                    stats_ref_mean.append(patch_mean)
+                    stats_ref_std.append(patch_std)
+                
                 if save_examples:
                     images_ref.append(image_ref)
                     vis_image_background = model.get_embedding_visualization(features_ref_i, grid_size1, mask_ref)
@@ -102,6 +160,15 @@ def run_anomaly_detection(
                     vis_backgroud.append(vis_image_background)
         
         features_ref = np.concatenate(features_ref, axis=0).astype('float32')
+        
+        # Convert statistics to numpy arrays
+        if len(stats_ref_mean) > 0:
+            stats_ref_mean = np.array(stats_ref_mean).astype('float32')
+            stats_ref_std = np.array(stats_ref_std).astype('float32')
+        else:
+            # フォールバック：統計量が空の場合はダミーデータ
+            stats_ref_mean = np.zeros((1, features_ref.shape[1]), dtype='float32')
+            stats_ref_std = np.zeros((1, features_ref.shape[1]), dtype='float32')
 
         if faiss_on_cpu:
             # similariy search on CPU
@@ -117,6 +184,20 @@ def run_anomaly_detection(
         if knn_metric == "L2_normalized":
             faiss.normalize_L2(features_ref)
         knn_index.add(features_ref)
+        
+        # Build statistics indices for 2-stage detection
+        if faiss_on_cpu:
+            stats_index_mean = faiss.IndexFlatL2(stats_ref_mean.shape[1])
+            stats_index_std = faiss.IndexFlatL2(stats_ref_std.shape[1])
+        else:
+            stats_index_mean = faiss.GpuIndexFlatL2(res, stats_ref_mean.shape[1])
+            stats_index_std = faiss.GpuIndexFlatL2(res, stats_ref_std.shape[1])
+        
+        # Normalize and add statistics to indices
+        faiss.normalize_L2(stats_ref_mean)
+        faiss.normalize_L2(stats_ref_std)
+        stats_index_mean.add(stats_ref_mean)
+        stats_index_std.add(stats_ref_std)
 
         # end measuring time (for memory bank set up; in seconds, same for all test samples of this object)
         time_memorybank = time.time() - start_time
@@ -176,11 +257,44 @@ def run_anomaly_detection(
                 output_distances[mask2] = distances.squeeze()
                 d_masked = output_distances.reshape(grid_size2)
                 
+                # Calculate patch-based anomaly score (existing method)
+                patch_score = mean_top1p(output_distances.flatten())
+                
+                # Calculate statistics-based anomaly score (new method)
+                if len(features2) > 0:
+                    # テスト画像の統計量計算
+                    test_mean = features2.mean(axis=0)
+                    test_std = features2.std(axis=0)
+                    
+                    # L2正規化
+                    test_mean = test_mean / (np.linalg.norm(test_mean) + 1e-8)
+                    test_std = test_std / (np.linalg.norm(test_std) + 1e-8)
+                    
+                    # 統計量距離計算
+                    test_mean_norm = test_mean.reshape(1, -1).astype('float32')
+                    test_std_norm = test_std.reshape(1, -1).astype('float32')
+                    
+                    faiss.normalize_L2(test_mean_norm)
+                    faiss.normalize_L2(test_std_norm)
+                    
+                    dist_mean, _ = stats_index_mean.search(test_mean_norm, k=1)
+                    dist_std, _ = stats_index_std.search(test_std_norm, k=1)
+                    
+                    # 統計量スコア計算（コサイン距離変換）
+                    stats_score = 0.7 * (dist_mean[0][0] / 2) + 0.3 * (dist_std[0][0] / 2)
+                else:
+                    stats_score = 0.0
+                
+                # 2段階異常検知
+                is_anomaly, final_score, detection_method = two_stage_detection(
+                    patch_score, stats_score, object_name
+                )
+                
                 # save inference time
                 torch.cuda.synchronize() # Synchronize CUDA kernels before measuring time
                 inf_time = time.time() - start_time
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
-                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = mean_top1p(output_distances.flatten())
+                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
 
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]
