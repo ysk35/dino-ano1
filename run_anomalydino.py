@@ -48,6 +48,12 @@ def parse_args():
     parser.add_argument("--warmup_iters", type=int, default=25, help="Number of warmup iterations, relevant when benchmarking inference time.")
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
+    
+    # 2段階異常検知の閾値調整パラメータ（シンプル版）
+    parser.add_argument("--stage1_threshold", type=float, default=0.16, 
+                        help="Stage1 threshold for patch-based detection (default: 0.16)")
+    parser.add_argument("--stage2_threshold", type=float, default=0.12,
+                        help="Stage2 threshold for statistics-based detection (default: 0.12)")
 
     args = parser.parse_args()
     return args
@@ -121,6 +127,9 @@ if __name__=="__main__":
                             first_image = os.listdir(f"{args.data_root}/{object_name}/train/good")[0]
                             img_tensor, grid_size = model.prepare_image(f"{args.data_root}/{object_name}/train/good/{first_image}")
                             features = model.extract_features(img_tensor)
+                        
+                        # 2段階異常検知の閾値設定（シンプル版）
+                        print(f"Using thresholds: Stage1={args.stage1_threshold}, Stage2={args.stage2_threshold}")
                                          
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
@@ -138,7 +147,9 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                stage1_threshold = args.stage1_threshold,
+                                                                                stage2_threshold = args.stage2_threshold)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):

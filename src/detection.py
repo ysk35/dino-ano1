@@ -11,14 +11,16 @@ import torch
 from src.utils import augment_image, dists2map, plot_ref_images
 from src.post_eval import mean_top1p
 
-def two_stage_detection(patch_score, stats_score, object_name):
+def two_stage_detection(patch_score, stats_score, object_name, stage1_threshold=0.16, stage2_threshold=0.12):
     """
-    2段階異常検知
+    2段階異常検知（シンプル版）
     
     Args:
         patch_score: パッチベースのTop1%スコア
         stats_score: 統計量ベースのスコア
         object_name: オブジェクト名
+        stage1_threshold: Stage1閾値（パッチベース）
+        stage2_threshold: Stage2閾値（統計量ベース）
     
     Returns:
         is_anomaly: 異常判定結果 (bool)
@@ -26,24 +28,12 @@ def two_stage_detection(patch_score, stats_score, object_name):
         detection_method: 検知方法 (str)
     """
     
-    # カテゴリ別閾値設定
-    thresholds = {
-        'cable': {'t1': 0.15, 't2': 0.08},      # 積極的Stage2
-        'screw': {'t1': 0.18, 't2': 0.12},      # 標準
-        'capsule': {'t1': 0.16, 't2': 0.10},    # 標準
-        'pill': {'t1': 0.14, 't2': 0.20},       # 保守的Stage2
-        'transistor': {'t1': 0.17, 't2': 0.18}, # 保守的Stage2
-        'default': {'t1': 0.16, 't2': 0.12}
-    }
-    
-    thres = thresholds.get(object_name, thresholds['default'])
-    
     # Stage 1: パッチベース検知
-    if patch_score > thres['t1']:
+    if patch_score > stage1_threshold:
         return True, patch_score, "patch_based"
     
     # Stage 2: 統計量による補完検知
-    elif stats_score > thres['t2']:
+    elif stats_score > stage2_threshold:
         return True, stats_score, "statistics_based"
     
     # 正常判定
@@ -66,7 +56,9 @@ def run_anomaly_detection(
         faiss_on_cpu = False,
         seed = 0,
         save_patch_dists = True,
-        save_tiffs = False):
+        save_tiffs = False,
+        stage1_threshold = 0.16,
+        stage2_threshold = 0.12):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -287,7 +279,7 @@ def run_anomaly_detection(
                 
                 # 2段階異常検知
                 is_anomaly, final_score, detection_method = two_stage_detection(
-                    patch_score, stats_score, object_name
+                    patch_score, stats_score, object_name, stage1_threshold, stage2_threshold
                 )
                 
                 # save inference time
