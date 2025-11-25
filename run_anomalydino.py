@@ -49,6 +49,12 @@ def parse_args():
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
 
+    # Adaptive threshold parameters
+    parser.add_argument("--use_adaptive_threshold", default=False, action=argparse.BooleanOptionalAction,
+                        help="Use adaptive threshold based on normal sample distribution (default: False)")
+    parser.add_argument("--adaptive_percentile", type=float, default=95,
+                        help="Percentile for adaptive threshold calculation (default: 95)")
+
     args = parser.parse_args()
     return args
 
@@ -122,10 +128,10 @@ if __name__=="__main__":
                             img_tensor, grid_size = model.prepare_image(f"{args.data_root}/{object_name}/train/good/{first_image}")
                             features = model.extract_features(img_tensor)
                                          
-                        anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
+                        anomaly_scores, time_memorybank, time_inference, adaptive_threshold = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -138,8 +144,14 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
-                        
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                use_adaptive_threshold = args.use_adaptive_threshold,
+                                                                                adaptive_percentile = args.adaptive_percentile)
+
+                        # Log adaptive threshold if computed
+                        if adaptive_threshold is not None:
+                            print(f"  → Adaptive threshold for {object_name}: {adaptive_threshold:.4f}")
+
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
                             anomaly_score = anomaly_scores[sample]
