@@ -160,7 +160,7 @@ if __name__=="__main__":
                         # print(f"Mean inference time ({object_name}): {sum(time_inference.values())/len(time_inference):.5f} s/sample")
 
                         # Save detailed scores (Stage1/Stage2 scores) to JSON
-                        detailed_scores_file = f"{run_dir}/detailed_scores_{object_name}_{shot}shot.json"
+                        detailed_scores_file = f"{results_dir}/detailed_scores_{object_name}_{shot}shot.json"
                         with open(detailed_scores_file, 'w') as f:
                             json.dump(detailed_scores, f, indent=2)
                         print(f"Detailed scores saved to {detailed_scores_file}")                        
