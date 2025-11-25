@@ -59,7 +59,8 @@ class ViTWrapper(VisionTransformerWrapper):
         img_tensor = self.transform(img).unsqueeze(0)
         return img_tensor, self.grid_size
 
-    def extract_features(self, img_tensor):
+    def extract_features(self, img_tensor, layer=None):
+        """Extract features from the last layer (layer parameter ignored for ViT)."""
         with torch.no_grad():
             img_tensor = img_tensor.to(self.device)
             patches = self.model._process_input(img_tensor)
@@ -67,6 +68,12 @@ class ViTWrapper(VisionTransformerWrapper):
             patches = torch.cat((class_token, patches), dim=1)
             patch_features = self.model.encoder(patches)
             return patch_features[:, 1:, :].squeeze().cpu().numpy()  # Exclude the class token
+
+    def extract_features_multilayer(self, img_tensor, layers=[6, 12]):
+        """Multi-layer extraction not supported for ViT. Returns only last layer."""
+        print("Warning: Multi-layer extraction not supported for ViT. Returning last layer only.")
+        features = self.extract_features(img_tensor)
+        return {layers[-1]: features}  # Return only last layer
 
     def get_embedding_visualization(self, tokens, grid_size = (14,14), resized_mask=None, normalize=True):
         pca = PCA(n_components=3, svd_solver='randomized')
@@ -122,15 +129,56 @@ class DINOv2Wrapper(VisionTransformerWrapper):
         return image_tensor, grid_size
     
 
-    def extract_features(self, image_tensor):
+    def extract_features(self, image_tensor, layer=None):
+        """
+        Extract features from a specific layer or the last layer (default).
+
+        Args:
+            image_tensor: Input image tensor
+            layer: Layer index (1-12 for DINOv2). If None, uses the last layer.
+
+        Returns:
+            Extracted features as numpy array
+        """
         with torch.inference_mode():
             if self.half_precision:
                 image_batch = image_tensor.unsqueeze(0).half().to(self.device)
             else:
                 image_batch = image_tensor.unsqueeze(0).to(self.device)
 
-            tokens = self.model.get_intermediate_layers(image_batch)[0].squeeze()
+            if layer is None:
+                # Default: extract from last layer
+                tokens = self.model.get_intermediate_layers(image_batch, n=1)[0].squeeze()
+            else:
+                # Extract from specific layer
+                tokens = self.model.get_intermediate_layers(image_batch, n=[layer])[0].squeeze()
         return tokens.cpu().numpy()
+
+    def extract_features_multilayer(self, image_tensor, layers=[6, 12]):
+        """
+        Extract features from multiple layers.
+
+        Args:
+            image_tensor: Input image tensor
+            layers: List of layer indices to extract features from (e.g., [6, 12])
+
+        Returns:
+            Dictionary mapping layer index to extracted features
+        """
+        with torch.inference_mode():
+            if self.half_precision:
+                image_batch = image_tensor.unsqueeze(0).half().to(self.device)
+            else:
+                image_batch = image_tensor.unsqueeze(0).to(self.device)
+
+            # Extract features from specified layers
+            layer_outputs = self.model.get_intermediate_layers(image_batch, n=layers)
+
+            features_dict = {}
+            for i, layer_idx in enumerate(layers):
+                features_dict[layer_idx] = layer_outputs[i].squeeze().cpu().numpy()
+
+        return features_dict
 
 
     def get_embedding_visualization(self, tokens, grid_size, resized_mask=None, normalize=True):

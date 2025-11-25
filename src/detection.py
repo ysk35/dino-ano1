@@ -29,7 +29,10 @@ def run_anomaly_detection(
         save_patch_dists = True,
         save_tiffs = False,
         use_adaptive_threshold = False,
-        adaptive_percentile = 95):
+        adaptive_percentile = 95,
+        use_multilayer = False,
+        feature_layers = [6, 12],
+        layer_weights = [0.4, 0.6]):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -65,6 +68,11 @@ def run_anomaly_detection(
     masks_ref = []
     vis_backgroud = []
 
+    # Multi-layer support
+    if use_multilayer:
+        features_ref_multilayer = {layer: [] for layer in feature_layers}
+        print(f"Multi-layer mode enabled. Using layers: {feature_layers} with weights: {layer_weights}")
+
     img_ref_folder = f"{data_root}/{object_name}/train/good/"
     if n_ref_samples == -1:
         # full-shot setting
@@ -92,33 +100,68 @@ def run_anomaly_detection(
             for i in range(len(img_augmented)):
                 image_ref = img_augmented[i]
                 image_ref_tensor, grid_size1 = model.prepare_image(image_ref)
-                features_ref_i = model.extract_features(image_ref_tensor)
-                
+
+                if use_multilayer:
+                    # Extract features from multiple layers
+                    features_dict = model.extract_features_multilayer(image_ref_tensor, layers=feature_layers)
+                    # Use the last layer for mask computation
+                    features_ref_i = features_dict[feature_layers[-1]]
+                else:
+                    features_ref_i = model.extract_features(image_ref_tensor)
+
                 # compute background mask and discard background patches
                 mask_ref = model.compute_background_mask(features_ref_i, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
-                features_ref.append(features_ref_i[mask_ref])
+
+                if use_multilayer:
+                    # Store features for each layer
+                    for layer in feature_layers:
+                        features_ref_multilayer[layer].append(features_dict[layer][mask_ref])
+                else:
+                    features_ref.append(features_ref_i[mask_ref])
+
                 if save_examples:
                     images_ref.append(image_ref)
                     vis_image_background = model.get_embedding_visualization(features_ref_i, grid_size1, mask_ref)
                     masks_ref.append(mask_ref)
                     vis_backgroud.append(vis_image_background)
         
-        features_ref = np.concatenate(features_ref, axis=0).astype('float32')
+        if use_multilayer:
+            # Build memory banks for each layer
+            knn_indices = {}
+            if not faiss_on_cpu:
+                res = faiss.StandardGpuResources()
 
-        if faiss_on_cpu:
-            # similariy search on CPU
-            knn_index = faiss.IndexFlatL2(features_ref.shape[1])
+            for layer in feature_layers:
+                features_layer = np.concatenate(features_ref_multilayer[layer], axis=0).astype('float32')
+
+                if faiss_on_cpu:
+                    knn_index_layer = faiss.IndexFlatL2(features_layer.shape[1])
+                else:
+                    knn_index_layer = faiss.GpuIndexFlatL2(res, features_layer.shape[1])
+
+                if knn_metric == "L2_normalized":
+                    faiss.normalize_L2(features_layer)
+                knn_index_layer.add(features_layer)
+                knn_indices[layer] = knn_index_layer
+                print(f"  Layer {layer}: Built memory bank with {features_layer.shape[0]} patches")
         else:
-            # similariy search on GPU
-            res = faiss.StandardGpuResources()
-            knn_index = faiss.GpuIndexFlatL2(res, features_ref.shape[1])
-            # knn_index = faiss.IndexFlatL2(features_ref.shape[1])
-            # knn_index = faiss.index_cpu_to_gpu(res, int(model.device[-1]), knn_index)
+            # Single layer (original code)
+            features_ref = np.concatenate(features_ref, axis=0).astype('float32')
+
+            if faiss_on_cpu:
+                # similariy search on CPU
+                knn_index = faiss.IndexFlatL2(features_ref.shape[1])
+            else:
+                # similariy search on GPU
+                res = faiss.StandardGpuResources()
+                knn_index = faiss.GpuIndexFlatL2(res, features_ref.shape[1])
+                # knn_index = faiss.IndexFlatL2(features_ref.shape[1])
+                # knn_index = faiss.index_cpu_to_gpu(res, int(model.device[-1]), knn_index)
 
 
-        if knn_metric == "L2_normalized":
-            faiss.normalize_L2(features_ref)
-        knn_index.add(features_ref)
+            if knn_metric == "L2_normalized":
+                faiss.normalize_L2(features_ref)
+            knn_index.add(features_ref)
 
         # end measuring time (for memory bank set up; in seconds, same for all test samples of this object)
         time_memorybank = time.time() - start_time
@@ -203,7 +246,13 @@ def run_anomaly_detection(
                 # Extract test features
                 image_test = cv2.cvtColor(cv2.imread(image_test_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
                 image_tensor2, grid_size2 = model.prepare_image(image_test)
-                features2 = model.extract_features(image_tensor2)
+
+                if use_multilayer:
+                    # Extract features from multiple layers
+                    features_dict2 = model.extract_features_multilayer(image_tensor2, layers=feature_layers)
+                    features2 = features_dict2[feature_layers[-1]]  # Use last layer for mask
+                else:
+                    features2 = model.extract_features(image_tensor2)
 
                 # Compute background mask
                 if masking:
@@ -213,32 +262,80 @@ def run_anomaly_detection(
                 if save_examples and idx < 3:
                     vis_image_test_background = model.get_embedding_visualization(features2, grid_size2, mask2)
 
-                # Discard irrelevant features
-                features2 = features2[mask2]
+                if use_multilayer:
+                    # Compute distances for each layer and fuse
+                    layer_scores = []
+                    for layer_idx, layer in enumerate(feature_layers):
+                        features_layer = features_dict2[layer][mask2]
 
-                # Compute distances to nearest neighbors in M
-                if knn_metric == "L2":
-                    distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
-                    if knn_neighbors > 1:
-                        distances = distances.mean(axis=1)
-                    distances = np.sqrt(distances)
+                        # Compute distances
+                        if knn_metric == "L2":
+                            distances_layer, _ = knn_indices[layer].search(features_layer, k=knn_neighbors)
+                            if knn_neighbors > 1:
+                                distances_layer = distances_layer.mean(axis=1)
+                            distances_layer = np.sqrt(distances_layer)
+                        elif knn_metric == "L2_normalized":
+                            features_layer_norm = features_layer.copy().astype('float32')
+                            faiss.normalize_L2(features_layer_norm)
+                            distances_layer, _ = knn_indices[layer].search(features_layer_norm, k=knn_neighbors)
+                            if knn_neighbors > 1:
+                                distances_layer = distances_layer.mean(axis=1)
+                            distances_layer = distances_layer / 2
 
-                elif knn_metric == "L2_normalized":
-                    faiss.normalize_L2(features2) 
-                    distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
-                    if knn_neighbors > 1:
-                        distances = distances.mean(axis=1)
-                    distances = distances / 2   # equivalent to cosine distance (1 - cosine similarity)
+                        # Compute anomaly score for this layer
+                        output_distances_layer = np.zeros_like(mask2, dtype=float)
+                        output_distances_layer[mask2] = distances_layer.squeeze()
+                        score_layer = mean_top1p(output_distances_layer.flatten())
+                        layer_scores.append(score_layer)
 
-                output_distances = np.zeros_like(mask2, dtype=float)
-                output_distances[mask2] = distances.squeeze()
-                d_masked = output_distances.reshape(grid_size2)
-                
+                    # Fuse scores with weights
+                    final_score = sum(w * s for w, s in zip(layer_weights, layer_scores))
+
+                    # Use last layer for visualization
+                    features2 = features_dict2[feature_layers[-1]][mask2]
+                    if knn_metric == "L2":
+                        distances, _ = knn_indices[feature_layers[-1]].search(features2, k=knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances = distances.mean(axis=1)
+                        distances = np.sqrt(distances)
+                    elif knn_metric == "L2_normalized":
+                        faiss.normalize_L2(features2)
+                        distances, _ = knn_indices[feature_layers[-1]].search(features2, k=knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances = distances.mean(axis=1)
+                        distances = distances / 2
+
+                    output_distances = np.zeros_like(mask2, dtype=float)
+                    output_distances[mask2] = distances.squeeze()
+                    d_masked = output_distances.reshape(grid_size2)
+                else:
+                    # Single layer (original code)
+                    features2 = features2[mask2]
+
+                    # Compute distances to nearest neighbors in M
+                    if knn_metric == "L2":
+                        distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances = distances.mean(axis=1)
+                        distances = np.sqrt(distances)
+
+                    elif knn_metric == "L2_normalized":
+                        faiss.normalize_L2(features2)
+                        distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances = distances.mean(axis=1)
+                        distances = distances / 2   # equivalent to cosine distance (1 - cosine similarity)
+
+                    output_distances = np.zeros_like(mask2, dtype=float)
+                    output_distances[mask2] = distances.squeeze()
+                    d_masked = output_distances.reshape(grid_size2)
+                    final_score = mean_top1p(output_distances.flatten())
+
                 # save inference time
                 torch.cuda.synchronize() # Synchronize CUDA kernels before measuring time
                 inf_time = time.time() - start_time
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
-                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = mean_top1p(output_distances.flatten())
+                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
 
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]
