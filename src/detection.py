@@ -29,7 +29,8 @@ def run_anomaly_detection(
         save_patch_dists = True,
         save_tiffs = False,
         image_preprocessing = "none",
-        preprocessing_kwargs = None):
+        preprocessing_kwargs = None,
+        num_rotations = 8):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -92,7 +93,7 @@ def run_anomaly_detection(
 
             # augment reference image (if applicable)...
             if rotation:
-                img_augmented = augment_image(image_ref)
+                img_augmented = augment_image(image_ref, num_rotations=num_rotations)
             else:
                 img_augmented = [image_ref]
             for i in range(len(img_augmented)):

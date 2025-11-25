@@ -61,6 +61,10 @@ def parse_args():
     parser.add_argument("--clamp_max_value", type=int, default=255,
                         help="Maximum value for clamp preprocessing.")
 
+    # Data augmentation arguments
+    parser.add_argument("--num_rotations", type=int, default=8,
+                        help="Number of rotation augmentations. Common values: 8 (default), 16, 32. Higher values increase memory bank density.")
+
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
 
     args = parser.parse_args()
@@ -103,6 +107,10 @@ if __name__=="__main__":
                 results_dir += f"_gamma{args.gamma_value}"
             elif args.image_preprocessing == "clamp":
                 results_dir += f"_clamp{args.clamp_min_value}-{args.clamp_max_value}"
+
+        # Add rotation augmentation to results directory name
+        if args.num_rotations != 8:
+            results_dir += f"_rot{args.num_rotations}"
 
         if args.tag != None:
             results_dir += "_" + args.tag
@@ -179,7 +187,8 @@ if __name__=="__main__":
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
                                                                                 save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
                                                                                 image_preprocessing = args.image_preprocessing,
-                                                                                preprocessing_kwargs = preprocessing_kwargs)
+                                                                                preprocessing_kwargs = preprocessing_kwargs,
+                                                                                num_rotations = args.num_rotations)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):

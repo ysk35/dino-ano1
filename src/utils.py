@@ -69,12 +69,26 @@ def preprocess_image(img, method="none", **kwargs):
         raise ValueError(f"Unknown preprocessing method: {method}")
 
 
-def augment_image(img_ref, augmentation = "rotate", angles = [0, 45, 90, 135, 180, 225, 270, 315]):
+def augment_image(img_ref, augmentation = "rotate", angles = None, num_rotations = 8):
     """
-    Simply augmentation of images, currently just rotation.
+    Data augmentation for images, supporting flexible rotation.
+
+    Parameters:
+    - img_ref: Reference image (numpy array)
+    - augmentation: Augmentation method (default: "rotate")
+    - angles: List of rotation angles. If None, generates evenly spaced angles
+    - num_rotations: Number of rotations to generate (default: 8)
+                     Common values: 8, 16, 32 for increasing memory bank density
+
+    Returns:
+    - List of augmented images
     """
     imgs = []
     if augmentation == "rotate":
+        # If angles not provided, generate evenly spaced angles
+        if angles is None:
+            angles = [i * (360 / num_rotations) for i in range(num_rotations)]
+
         for angle in angles:
             imgs.append(rotate_image(img_ref, angle))
     return imgs
