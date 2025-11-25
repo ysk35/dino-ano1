@@ -201,6 +201,7 @@ def run_anomaly_detection(
         
         inference_times = {}
         anomaly_scores = {}
+        detailed_scores = {}  # Stage別の詳細スコアを記録
 
         idx = 0
         # Evaluate anomalies for each anomaly type (and "good")
@@ -288,6 +289,17 @@ def run_anomaly_detection(
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
                 anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
 
+                # Stage別の詳細スコアを記録
+                sample_key = f"{type_anomaly}/{img_test_nr}"
+                detailed_scores[sample_key] = {
+                    "patch_score": float(patch_score),
+                    "stats_score": float(stats_score),
+                    "final_score": float(final_score),
+                    "is_anomaly": bool(is_anomaly),
+                    "detection_method": detection_method,
+                    "gt_label": type_anomaly != 'good'  # 正解ラベル（goodでなければ異常）
+                }
+
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]
                 if save_tiffs:
@@ -330,4 +342,4 @@ def run_anomaly_detection(
                     plt.savefig(f"{plots_dir}/{object_name}/examples/example_{type_anomaly}_{idx}.png")
                     plt.close()
 
-    return anomaly_scores, time_memorybank, inference_times
+    return anomaly_scores, time_memorybank, inference_times, detailed_scores
