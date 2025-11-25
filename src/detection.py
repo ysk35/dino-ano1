@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-import os 
+import os
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -7,6 +7,7 @@ import faiss
 import tifffile as tiff
 import time
 import torch
+from sklearn.decomposition import PCA
 
 from src.utils import augment_image, dists2map, plot_ref_images
 from src.post_eval import mean_top1p
@@ -27,7 +28,9 @@ def run_anomaly_detection(
         faiss_on_cpu = False,
         seed = 0,
         save_patch_dists = True,
-        save_tiffs = False):
+        save_tiffs = False,
+        use_pca_whitening = False,
+        pca_dims = 256):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -103,6 +106,14 @@ def run_anomaly_detection(
         
         features_ref = np.concatenate(features_ref, axis=0).astype('float32')
 
+        # Apply PCA Whitening if enabled
+        pca = None
+        if use_pca_whitening:
+            print(f"Applying PCA Whitening: {features_ref.shape[1]} → {pca_dims} dims")
+            pca = PCA(n_components=pca_dims, whiten=True, random_state=seed)
+            features_ref = pca.fit_transform(features_ref).astype('float32')
+            print(f"PCA explained variance ratio: {pca.explained_variance_ratio_.sum():.4f}")
+
         if faiss_on_cpu:
             # similariy search on CPU
             knn_index = faiss.IndexFlatL2(features_ref.shape[1])
@@ -157,6 +168,10 @@ def run_anomaly_detection(
 
                 # Discard irrelevant features
                 features2 = features2[mask2]
+
+                # Apply PCA transform if enabled
+                if use_pca_whitening and pca is not None:
+                    features2 = pca.transform(features2).astype('float32')
 
                 # Compute distances to nearest neighbors in M
                 if knn_metric == "L2":

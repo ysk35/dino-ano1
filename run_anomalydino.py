@@ -49,6 +49,12 @@ def parse_args():
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
 
+    # PCA Whitening parameters
+    parser.add_argument("--use_pca_whitening", default=False, action=argparse.BooleanOptionalAction,
+                        help="Apply PCA Whitening to features for better anomaly detection (default: False)")
+    parser.add_argument("--pca_dims", type=int, default=256,
+                        help="Number of dimensions after PCA Whitening (default: 256)")
+
     args = parser.parse_args()
     return args
 
@@ -125,7 +131,7 @@ if __name__=="__main__":
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -138,7 +144,9 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                use_pca_whitening = args.use_pca_whitening,
+                                                                                pca_dims = args.pca_dims)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
