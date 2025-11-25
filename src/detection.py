@@ -194,16 +194,22 @@ def run_anomaly_detection(
                     if len(features_ref_test) == 0:
                         continue
 
-                    # Compute kNN distances
+                    # Compute kNN distances (k+1 to exclude self-match)
+                    k_search = knn_neighbors + 1  # +1 to exclude the feature itself
+
                     if knn_metric == "L2":
-                        distances_ref, _ = knn_index.search(features_ref_test, k=knn_neighbors)
+                        distances_ref, _ = knn_index.search(features_ref_test, k=k_search)
+                        # Skip the first neighbor (itself, distance=0)
+                        distances_ref = distances_ref[:, 1:]
                         if knn_neighbors > 1:
                             distances_ref = distances_ref.mean(axis=1)
                         distances_ref = np.sqrt(distances_ref)
                     elif knn_metric == "L2_normalized":
                         features_ref_test_norm = features_ref_test.copy().astype('float32')
                         faiss.normalize_L2(features_ref_test_norm)
-                        distances_ref, _ = knn_index.search(features_ref_test_norm, k=knn_neighbors)
+                        distances_ref, _ = knn_index.search(features_ref_test_norm, k=k_search)
+                        # Skip the first neighbor (itself, distance=0)
+                        distances_ref = distances_ref[:, 1:]
                         if knn_neighbors > 1:
                             distances_ref = distances_ref.mean(axis=1)
                         distances_ref = distances_ref / 2  # cosine distance
