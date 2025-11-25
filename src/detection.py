@@ -72,6 +72,8 @@ def run_anomaly_detection(
     if use_multilayer:
         features_ref_multilayer = {layer: [] for layer in feature_layers}
         print(f"Multi-layer mode enabled. Using layers: {feature_layers} with weights: {layer_weights}")
+        if len(feature_layers) != len(layer_weights):
+            raise ValueError(f"Number of layers ({len(feature_layers)}) must match number of weights ({len(layer_weights)})")
 
     img_ref_folder = f"{data_root}/{object_name}/train/good/"
     if n_ref_samples == -1:
@@ -106,6 +108,10 @@ def run_anomaly_detection(
                     features_dict = model.extract_features_multilayer(image_ref_tensor, layers=feature_layers)
                     # Use the last layer for mask computation
                     features_ref_i = features_dict[feature_layers[-1]]
+                    # Debug: Print feature dimensions for first sample
+                    if len(images_ref) == 0:
+                        for layer in feature_layers:
+                            print(f"  Layer {layer}: feature shape = {features_dict[layer].shape}")
                 else:
                     features_ref_i = model.extract_features(image_ref_tensor)
 
@@ -325,6 +331,13 @@ def run_anomaly_detection(
 
                     # Fuse scores with weights
                     final_score = sum(w * s for w, s in zip(layer_weights, layer_scores))
+
+                    # Debug: Print layer scores for first few samples
+                    if idx < 3:
+                        print(f"  [DEBUG] Sample {type_anomaly}/{img_test_nr}:")
+                        for layer_idx, (layer, score, weight) in enumerate(zip(feature_layers, layer_scores, layer_weights)):
+                            print(f"    Layer {layer}: score={score:.4f}, weight={weight:.2f}")
+                        print(f"    Fused score: {final_score:.4f}")
 
                     # Use last layer for visualization
                     features2 = features_dict2[feature_layers[-1]][mask2]
