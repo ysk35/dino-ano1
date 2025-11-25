@@ -1,10 +1,11 @@
 import argparse
 import os
-from argparse import ArgumentParser, Action 
+from argparse import ArgumentParser, Action
 import yaml
 from tqdm import trange
 
 import csv
+import json
 
 from src.utils import get_dataset_info 
 from src.detection import run_anomaly_detection
@@ -48,6 +49,12 @@ def parse_args():
     parser.add_argument("--warmup_iters", type=int, default=25, help="Number of warmup iterations, relevant when benchmarking inference time.")
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
+    
+    # 2段階異常検知の閾値調整パラメータ（シンプル版）
+    parser.add_argument("--stage1_threshold", type=float, default=0.16, 
+                        help="Stage1 threshold for patch-based detection (default: 0.16)")
+    parser.add_argument("--stage2_threshold", type=float, default=0.12,
+                        help="Stage2 threshold for statistics-based detection (default: 0.12)")
 
     args = parser.parse_args()
     return args
@@ -121,8 +128,11 @@ if __name__=="__main__":
                             first_image = os.listdir(f"{args.data_root}/{object_name}/train/good")[0]
                             img_tensor, grid_size = model.prepare_image(f"{args.data_root}/{object_name}/train/good/{first_image}")
                             features = model.extract_features(img_tensor)
+                        
+                        # 2段階異常検知の閾値設定（シンプル版）
+                        print(f"Using thresholds: Stage1={args.stage1_threshold}, Stage2={args.stage2_threshold}")
                                          
-                        anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
+                        anomaly_scores, time_memorybank, time_inference, detailed_scores = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
                                                                                 data_root = args.data_root, 
@@ -138,14 +148,22 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                stage1_threshold = args.stage1_threshold,
+                                                                                stage2_threshold = args.stage2_threshold)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
                             anomaly_score = anomaly_scores[sample]
                             inference_time = time_inference[sample]
                             writer.writerow([object_name, sample, f"{anomaly_score:.5f}", f"{time_memorybank:.5f}", f"{inference_time:.5f}"])
-                        # print(f"Mean inference time ({object_name}): {sum(time_inference.values())/len(time_inference):.5f} s/sample")                        
+                        # print(f"Mean inference time ({object_name}): {sum(time_inference.values())/len(time_inference):.5f} s/sample")
+
+                        # Save detailed scores (Stage1/Stage2 scores) to JSON
+                        detailed_scores_file = f"{results_dir}/detailed_scores_{object_name}_{shot}shot.json"
+                        with open(detailed_scores_file, 'w') as f:
+                            json.dump(detailed_scores, f, indent=2)
+                        print(f"Detailed scores saved to {detailed_scores_file}")                        
 
                 # read inference times from file
                 with open(timeit_file, 'r') as file:
