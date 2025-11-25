@@ -55,6 +55,14 @@ def parse_args():
     parser.add_argument("--adaptive_percentile", type=float, default=95,
                         help="Percentile for adaptive threshold calculation (default: 95)")
 
+    # Multi-layer parameters
+    parser.add_argument("--use_multilayer", default=False, action=argparse.BooleanOptionalAction,
+                        help="Use multi-layer feature fusion (default: False)")
+    parser.add_argument("--feature_layers", nargs='+', type=int, default=[6, 12],
+                        help="Layers to extract features from (e.g., 6 12)")
+    parser.add_argument("--layer_weights", nargs='+', type=float, default=[0.4, 0.6],
+                        help="Weights for each layer (e.g., 0.4 0.6)")
+
     args = parser.parse_args()
     return args
 
@@ -146,7 +154,10 @@ if __name__=="__main__":
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
                                                                                 save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
                                                                                 use_adaptive_threshold = args.use_adaptive_threshold,
-                                                                                adaptive_percentile = args.adaptive_percentile)
+                                                                                adaptive_percentile = args.adaptive_percentile,
+                                                                                use_multilayer = args.use_multilayer,
+                                                                                feature_layers = args.feature_layers,
+                                                                                layer_weights = args.layer_weights)
 
                         # Log adaptive threshold if computed
                         if adaptive_threshold is not None:
