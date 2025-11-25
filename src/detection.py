@@ -27,7 +27,9 @@ def run_anomaly_detection(
         faiss_on_cpu = False,
         seed = 0,
         save_patch_dists = True,
-        save_tiffs = False):
+        save_tiffs = False,
+        use_adaptive_threshold = False,
+        adaptive_percentile = 95):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -120,6 +122,62 @@ def run_anomaly_detection(
 
         # end measuring time (for memory bank set up; in seconds, same for all test samples of this object)
         time_memorybank = time.time() - start_time
+
+        # ========== Adaptive Threshold Computation ==========
+        adaptive_threshold = None
+        if use_adaptive_threshold:
+            print(f"Computing adaptive threshold from {len(img_ref_samples)} normal samples...")
+            all_patch_scores = []
+
+            for img_ref_n in tqdm(img_ref_samples, desc="Self-testing normal samples", leave=False):
+                img_ref = f"{img_ref_folder}{img_ref_n}"
+                image_ref = cv2.cvtColor(cv2.imread(img_ref, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+                # Apply augmentation (rotation if applicable)
+                if rotation:
+                    img_augmented = augment_image(image_ref)
+                else:
+                    img_augmented = [image_ref]
+
+                for aug_img in img_augmented:
+                    image_ref_tensor, grid_size_ref = model.prepare_image(aug_img)
+                    features_ref_test = model.extract_features(image_ref_tensor)
+
+                    # Apply mask
+                    mask_ref_test = model.compute_background_mask(features_ref_test, grid_size_ref,
+                                                                    threshold=10, masking_type=(mask_ref_images and masking))
+                    features_ref_test = features_ref_test[mask_ref_test]
+
+                    if len(features_ref_test) == 0:
+                        continue
+
+                    # Compute kNN distances
+                    if knn_metric == "L2":
+                        distances_ref, _ = knn_index.search(features_ref_test, k=knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances_ref = distances_ref.mean(axis=1)
+                        distances_ref = np.sqrt(distances_ref)
+                    elif knn_metric == "L2_normalized":
+                        features_ref_test_norm = features_ref_test.copy().astype('float32')
+                        faiss.normalize_L2(features_ref_test_norm)
+                        distances_ref, _ = knn_index.search(features_ref_test_norm, k=knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances_ref = distances_ref.mean(axis=1)
+                        distances_ref = distances_ref / 2  # cosine distance
+
+                    # Collect patch-level scores
+                    all_patch_scores.extend(distances_ref.flatten())
+
+            # Compute adaptive threshold from patch score distribution
+            all_patch_scores = np.array(all_patch_scores)
+            adaptive_threshold = np.percentile(all_patch_scores, adaptive_percentile)
+
+            print(f"Normal patch score distribution:")
+            print(f"  Mean: {all_patch_scores.mean():.4f}")
+            print(f"  Std:  {all_patch_scores.std():.4f}")
+            print(f"  {adaptive_percentile}th percentile: {adaptive_threshold:.4f}")
+            print(f"Adaptive threshold set to: {adaptive_threshold:.4f}")
+        # ====================================================
 
         # plot some reference samples for inspection
         if save_examples:
@@ -224,4 +282,4 @@ def run_anomaly_detection(
                     plt.savefig(f"{plots_dir}/{object_name}/examples/example_{type_anomaly}_{idx}.png")
                     plt.close()
 
-    return anomaly_scores, time_memorybank, inference_times
+    return anomaly_scores, time_memorybank, inference_times, adaptive_threshold
