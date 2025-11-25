@@ -120,6 +120,8 @@ if __name__=="__main__":
                 continue
             else:
                 timeit_file = results_dir + "/time_measurements.csv"
+                adaptive_thresholds = {}  # Store adaptive thresholds for each object
+
                 with open(timeit_file, 'w', newline='') as file:
                     writer = csv.writer(file)
                     writer.writerow(["Object", "Sample", "Anomaly_Score", "MemoryBank_Time", "Inference_Time"])
@@ -159,8 +161,9 @@ if __name__=="__main__":
                                                                                 feature_layers = args.feature_layers,
                                                                                 layer_weights = args.layer_weights)
 
-                        # Log adaptive threshold if computed
+                        # Log and save adaptive threshold if computed
                         if adaptive_threshold is not None:
+                            adaptive_thresholds[object_name] = float(adaptive_threshold)
                             print(f"  → Adaptive threshold for {object_name}: {adaptive_threshold:.4f}")
 
                         # write anomaly scores and inference times to file
@@ -176,6 +179,14 @@ if __name__=="__main__":
                     next(reader)
                     inference_times = [float(row[4]) for row in reader]
                 print(f"Finished AD for {len(objects)} objects (seed {seed}), mean inference time: {sum(inference_times)/len(inference_times):.5f} s/sample")
+
+                # Save adaptive thresholds if computed
+                if adaptive_thresholds:
+                    import json
+                    threshold_file = f"{results_dir}/adaptive_thresholds_seed={seed}.json"
+                    with open(threshold_file, 'w') as f:
+                        json.dump(adaptive_thresholds, f, indent=2)
+                    print(f"Saved adaptive thresholds to {threshold_file}")
 
                 # evaluate all finished runs and create sample anomaly maps for inspection
                 print(f"=========== Evaluate seed = {seed} ===========")

@@ -411,7 +411,7 @@ def eval_segmentation(gt_filenames, prediction_filenames, pro_integration_limit=
     return au_pro, auroc_px, f1_px
 
 
-def eval_classification(gt_filenames, prediction_filenames, aggregation_statistics = "meantop1p"):
+def eval_classification(gt_filenames, prediction_filenames, aggregation_statistics = "meantop1p", adaptive_threshold = None):
     # Read all ground truth and anomaly images.
     ground_truth = []
     predictions = []
@@ -459,17 +459,32 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
     # Compute image-level Average Precision (AP)
     ap_clf = average_precision_score(binary_labels, predictions)
     print(f"Average Precision (image-level): {ap_clf}", end=" -- ")
-  
+
     # Compute image_level F1 score
-    precisions, recalls, thresholds = precision_recall_curve(binary_labels, predictions)
-    f1_scores = (2 * precisions * recalls) / (precisions + recalls)
-    f1_clf = np.max(f1_scores[np.isfinite(f1_scores)])
-    
-    print(f"F1 (image-level): {f1_clf}")
-    
-    # フォルダ別ミス分析を追加
-    analyze_folder_errors(binary_labels, predictions, file_paths)
-    
+    if adaptive_threshold is not None:
+        # Use adaptive threshold
+        from sklearn.metrics import precision_score, recall_score
+        binary_predictions = np.array(predictions) >= adaptive_threshold
+        precision = precision_score(binary_labels, binary_predictions, zero_division=0)
+        recall = recall_score(binary_labels, binary_predictions, zero_division=0)
+        if precision + recall > 0:
+            f1_clf = 2 * precision * recall / (precision + recall)
+        else:
+            f1_clf = 0.0
+        print(f"F1 (image-level, adaptive threshold={adaptive_threshold:.4f}): {f1_clf}")
+
+        # フォルダ別ミス分析（適応的閾値使用）
+        analyze_folder_errors(binary_labels, predictions, file_paths, threshold=adaptive_threshold)
+    else:
+        # Use optimal threshold from precision-recall curve
+        precisions, recalls, thresholds = precision_recall_curve(binary_labels, predictions)
+        f1_scores = (2 * precisions * recalls) / (precisions + recalls)
+        f1_clf = np.max(f1_scores[np.isfinite(f1_scores)])
+        print(f"F1 (image-level, optimal threshold): {f1_clf}")
+
+        # フォルダ別ミス分析（最適閾値使用）
+        analyze_folder_errors(binary_labels, predictions, file_paths)
+
     return auroc_clf, ap_clf, f1_clf
 
 
@@ -495,6 +510,16 @@ def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, s
     - eval_segm: Whether to evaluate segmentation performance.
     - delete_tiff_files: Whether tiff files are deleted after evaluation (default True)
     """
+
+    # Load adaptive thresholds if available
+    adaptive_thresholds = None
+    if output_dir is not None and seed is not None:
+        threshold_file = path.join(output_dir, f"adaptive_thresholds_seed={seed}.json")
+        if path.exists(threshold_file):
+            import json
+            with open(threshold_file, 'r') as f:
+                adaptive_thresholds = json.load(f)
+            print(f"Loaded adaptive thresholds from {threshold_file}")
 
     # Parse the filenames of all ground truth and corresponding anomaly
     objects = get_objects_from_dataset(dataset)
@@ -546,11 +571,15 @@ def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, s
             
         if eval_clf:
         # Evaluate classification performance
+            # Get adaptive threshold for this object if available
+            adaptive_threshold = adaptive_thresholds.get(obj) if adaptive_thresholds is not None else None
+
             auroc_clf, ap_clf, f1_clf = \
                 eval_classification(
                     gt_filenames,
                     prediction_filenames,
-                    aggregation_statistics = aggregation_statistics)
+                    aggregation_statistics = aggregation_statistics,
+                    adaptive_threshold = adaptive_threshold)
 
             evaluation_dict[obj]['classification_AUROC'] = auroc_clf
             evaluation_dict[obj]['classification_AP'] = ap_clf
