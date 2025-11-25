@@ -169,63 +169,92 @@ def run_anomaly_detection(
         # ========== Adaptive Threshold Computation ==========
         adaptive_threshold = None
         if use_adaptive_threshold:
-            print(f"Computing adaptive threshold from {len(img_ref_samples)} normal samples...")
-            all_patch_scores = []
+            # For 1-shot: Use memory bank internal distances to avoid self-test bias
+            # For multi-shot: Use self-test on reference samples
+            if len(img_ref_samples) == 1:
+                print(f"Computing adaptive threshold from memory bank internal distances (1-shot)...")
+                # Sample features from memory bank to compute 2-KNN distances
+                num_samples = min(1000, features_ref.shape[0])  # Sample up to 1000 features
+                sample_indices = np.random.choice(features_ref.shape[0], size=num_samples, replace=False)
+                sampled_features = features_ref[sample_indices]
 
-            for img_ref_n in tqdm(img_ref_samples, desc="Self-testing normal samples", leave=False):
-                img_ref = f"{img_ref_folder}{img_ref_n}"
-                image_ref = cv2.cvtColor(cv2.imread(img_ref, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+                # Compute 2-KNN for each sampled feature (k=2 to get nearest neighbor excluding itself)
+                if knn_metric == "L2":
+                    distances, _ = knn_index.search(sampled_features, k=2)
+                    # Take 2nd nearest (1st is itself with distance ~0)
+                    neighbor_distances = np.sqrt(distances[:, 1])
+                elif knn_metric == "L2_normalized":
+                    sampled_features_norm = sampled_features.copy().astype('float32')
+                    faiss.normalize_L2(sampled_features_norm)
+                    distances, _ = knn_index.search(sampled_features_norm, k=2)
+                    neighbor_distances = distances[:, 1] / 2  # cosine distance
 
-                # Apply augmentation (rotation if applicable)
-                if rotation:
-                    img_augmented = augment_image(image_ref)
-                else:
-                    img_augmented = [image_ref]
+                # Use high percentile for 1-shot to be conservative
+                adaptive_threshold = np.percentile(neighbor_distances, 99.5)
 
-                for aug_img in img_augmented:
-                    image_ref_tensor, grid_size_ref = model.prepare_image(aug_img)
-                    features_ref_test = model.extract_features(image_ref_tensor)
+                print(f"Memory bank 2-KNN distance distribution (sampled {num_samples} features):")
+                print(f"  Mean: {neighbor_distances.mean():.4f}")
+                print(f"  Std:  {neighbor_distances.std():.4f}")
+                print(f"  99.5th percentile: {adaptive_threshold:.4f}")
+                print(f"Adaptive threshold set to: {adaptive_threshold:.4f} (memory bank method)")
+            else:
+                print(f"Computing adaptive threshold from {len(img_ref_samples)} normal samples...")
+                all_patch_scores = []
 
-                    # Apply mask
-                    mask_ref_test = model.compute_background_mask(features_ref_test, grid_size_ref,
-                                                                    threshold=10, masking_type=(mask_ref_images and masking))
-                    features_ref_test = features_ref_test[mask_ref_test]
+                for img_ref_n in tqdm(img_ref_samples, desc="Self-testing normal samples", leave=False):
+                    img_ref = f"{img_ref_folder}{img_ref_n}"
+                    image_ref = cv2.cvtColor(cv2.imread(img_ref, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
-                    if len(features_ref_test) == 0:
-                        continue
+                    # Apply augmentation (rotation if applicable)
+                    if rotation:
+                        img_augmented = augment_image(image_ref)
+                    else:
+                        img_augmented = [image_ref]
 
-                    # Compute kNN distances (k+1 to exclude self-match)
-                    k_search = knn_neighbors + 1  # +1 to exclude the feature itself
+                    for aug_img in img_augmented:
+                        image_ref_tensor, grid_size_ref = model.prepare_image(aug_img)
+                        features_ref_test = model.extract_features(image_ref_tensor)
 
-                    if knn_metric == "L2":
-                        distances_ref, _ = knn_index.search(features_ref_test, k=k_search)
-                        # Skip the first neighbor (itself, distance=0)
-                        distances_ref = distances_ref[:, 1:]
-                        if knn_neighbors > 1:
-                            distances_ref = distances_ref.mean(axis=1)
-                        distances_ref = np.sqrt(distances_ref)
-                    elif knn_metric == "L2_normalized":
-                        features_ref_test_norm = features_ref_test.copy().astype('float32')
-                        faiss.normalize_L2(features_ref_test_norm)
-                        distances_ref, _ = knn_index.search(features_ref_test_norm, k=k_search)
-                        # Skip the first neighbor (itself, distance=0)
-                        distances_ref = distances_ref[:, 1:]
-                        if knn_neighbors > 1:
-                            distances_ref = distances_ref.mean(axis=1)
-                        distances_ref = distances_ref / 2  # cosine distance
+                        # Apply mask
+                        mask_ref_test = model.compute_background_mask(features_ref_test, grid_size_ref,
+                                                                        threshold=10, masking_type=(mask_ref_images and masking))
+                        features_ref_test = features_ref_test[mask_ref_test]
 
-                    # Collect patch-level scores
-                    all_patch_scores.extend(distances_ref.flatten())
+                        if len(features_ref_test) == 0:
+                            continue
 
-            # Compute adaptive threshold from patch score distribution
-            all_patch_scores = np.array(all_patch_scores)
-            adaptive_threshold = np.percentile(all_patch_scores, adaptive_percentile)
+                        # Compute kNN distances (k+1 to exclude self-match)
+                        k_search = knn_neighbors + 1  # +1 to exclude the feature itself
 
-            print(f"Normal patch score distribution:")
-            print(f"  Mean: {all_patch_scores.mean():.4f}")
-            print(f"  Std:  {all_patch_scores.std():.4f}")
-            print(f"  {adaptive_percentile}th percentile: {adaptive_threshold:.4f}")
-            print(f"Adaptive threshold set to: {adaptive_threshold:.4f}")
+                        if knn_metric == "L2":
+                            distances_ref, _ = knn_index.search(features_ref_test, k=k_search)
+                            # Skip the first neighbor (itself, distance=0)
+                            distances_ref = distances_ref[:, 1:]
+                            if knn_neighbors > 1:
+                                distances_ref = distances_ref.mean(axis=1)
+                            distances_ref = np.sqrt(distances_ref)
+                        elif knn_metric == "L2_normalized":
+                            features_ref_test_norm = features_ref_test.copy().astype('float32')
+                            faiss.normalize_L2(features_ref_test_norm)
+                            distances_ref, _ = knn_index.search(features_ref_test_norm, k=k_search)
+                            # Skip the first neighbor (itself, distance=0)
+                            distances_ref = distances_ref[:, 1:]
+                            if knn_neighbors > 1:
+                                distances_ref = distances_ref.mean(axis=1)
+                            distances_ref = distances_ref / 2  # cosine distance
+
+                        # Collect patch-level scores
+                        all_patch_scores.extend(distances_ref.flatten())
+
+                # Compute adaptive threshold from patch score distribution
+                all_patch_scores = np.array(all_patch_scores)
+                adaptive_threshold = np.percentile(all_patch_scores, adaptive_percentile)
+
+                print(f"Normal patch score distribution:")
+                print(f"  Mean: {all_patch_scores.mean():.4f}")
+                print(f"  Std:  {all_patch_scores.std():.4f}")
+                print(f"  {adaptive_percentile}th percentile: {adaptive_threshold:.4f}")
+                print(f"Adaptive threshold set to: {adaptive_threshold:.4f} (self-test method)")
         # ====================================================
 
         # plot some reference samples for inspection
