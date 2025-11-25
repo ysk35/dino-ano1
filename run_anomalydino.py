@@ -51,10 +51,16 @@ def parse_args():
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
     
     # 2段階異常検知の閾値調整パラメータ（シンプル版）
-    parser.add_argument("--stage1_threshold", type=float, default=0.16, 
+    parser.add_argument("--stage1_threshold", type=float, default=0.16,
                         help="Stage1 threshold for patch-based detection (default: 0.16)")
     parser.add_argument("--stage2_threshold", type=float, default=0.12,
                         help="Stage2 threshold for statistics-based detection (default: 0.12)")
+
+    # マハラノビス距離のパラメータ
+    parser.add_argument("--use_mahalanobis", action="store_true",
+                        help="Use Mahalanobis distance instead of L2 distance")
+    parser.add_argument("--mahalanobis_reg", type=float, default=1e-5,
+                        help="Regularization parameter for covariance matrix (default: 1e-5)")
 
     args = parser.parse_args()
     return args
@@ -131,11 +137,13 @@ if __name__=="__main__":
                         
                         # 2段階異常検知の閾値設定（シンプル版）
                         print(f"Using thresholds: Stage1={args.stage1_threshold}, Stage2={args.stage2_threshold}")
-                                         
+                        if args.use_mahalanobis:
+                            print(f"Using Mahalanobis distance with reg={args.mahalanobis_reg}")
+
                         anomaly_scores, time_memorybank, time_inference, detailed_scores = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -150,7 +158,9 @@ if __name__=="__main__":
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
                                                                                 save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
                                                                                 stage1_threshold = args.stage1_threshold,
-                                                                                stage2_threshold = args.stage2_threshold)
+                                                                                stage2_threshold = args.stage2_threshold,
+                                                                                use_mahalanobis = args.use_mahalanobis,
+                                                                                mahalanobis_reg = args.mahalanobis_reg)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):

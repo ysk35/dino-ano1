@@ -11,6 +11,61 @@ import torch
 from src.utils import augment_image, dists2map, plot_ref_images
 from src.post_eval import mean_top1p
 
+def compute_mahalanobis_distance(features, mean, cov_inv):
+    """
+    マハラノビス距離を計算
+
+    Args:
+        features: テスト特徴ベクトル (N, d) または (d,)
+        mean: 正常データの平均 (d,)
+        cov_inv: 共分散行列の逆行列 (d, d)
+
+    Returns:
+        distances: マハラノビス距離 (N,) または float
+    """
+    # 1次元の場合は2次元に変換
+    if features.ndim == 1:
+        features = features.reshape(1, -1)
+        return_scalar = True
+    else:
+        return_scalar = False
+
+    # 平均との差分
+    diff = features - mean  # (N, d)
+
+    # マハラノビス距離: sqrt((x-μ)^T Σ^(-1) (x-μ))
+    # (N, d) @ (d, d) @ (d, N) -> (N, N) の対角成分
+    mahal_squared = np.sum(diff @ cov_inv * diff, axis=1)  # (N,)
+    distances = np.sqrt(np.maximum(mahal_squared, 0))  # 数値誤差で負にならないように
+
+    if return_scalar:
+        return distances[0]
+    return distances
+
+def compute_regularized_cov_inv(cov, reg=1e-5):
+    """
+    正則化された共分散行列の逆行列を計算
+
+    Args:
+        cov: 共分散行列 (d, d)
+        reg: 正則化パラメータ
+
+    Returns:
+        cov_inv: 正則化された共分散行列の逆行列
+    """
+    d = cov.shape[0]
+    cov_reg = cov + reg * np.eye(d)
+
+    try:
+        cov_inv = np.linalg.inv(cov_reg)
+    except np.linalg.LinAlgError:
+        # 逆行列が計算できない場合は、さらに強い正則化
+        print(f"Warning: Singular covariance matrix, using stronger regularization")
+        cov_reg = cov + (reg * 10) * np.eye(d)
+        cov_inv = np.linalg.inv(cov_reg)
+
+    return cov_inv
+
 def two_stage_detection(patch_score, stats_score, object_name, stage1_threshold=0.16, stage2_threshold=0.12):
     """
     2段階異常検知（シンプル版）
@@ -58,7 +113,9 @@ def run_anomaly_detection(
         save_patch_dists = True,
         save_tiffs = False,
         stage1_threshold = 0.16,
-        stage2_threshold = 0.12):
+        stage2_threshold = 0.12,
+        use_mahalanobis = False,
+        mahalanobis_reg = 1e-5):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -191,6 +248,17 @@ def run_anomaly_detection(
         stats_index_mean.add(stats_ref_mean)
         stats_index_std.add(stats_ref_std)
 
+        # Compute statistics for Mahalanobis distance
+        if use_mahalanobis:
+            print(f"Computing Mahalanobis distance statistics...")
+            mean_vector = np.mean(features_ref, axis=0)
+            cov_matrix = np.cov(features_ref, rowvar=False)
+            cov_inv = compute_regularized_cov_inv(cov_matrix, reg=mahalanobis_reg)
+            print(f"  Mean shape: {mean_vector.shape}, Cov shape: {cov_matrix.shape}")
+        else:
+            mean_vector = None
+            cov_inv = None
+
         # end measuring time (for memory bank set up; in seconds, same for all test samples of this object)
         time_memorybank = time.time() - start_time
 
@@ -233,14 +301,21 @@ def run_anomaly_detection(
                 features2 = features2[mask2]
 
                 # Compute distances to nearest neighbors in M
-                if knn_metric == "L2":
+                if use_mahalanobis:
+                    # Mahalanobis distance
+                    if knn_metric == "L2_normalized":
+                        faiss.normalize_L2(features2)
+                    distances = compute_mahalanobis_distance(features2, mean_vector, cov_inv)
+                    match2to1 = None  # Not used for Mahalanobis
+
+                elif knn_metric == "L2":
                     distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
                     if knn_neighbors > 1:
                         distances = distances.mean(axis=1)
                     distances = np.sqrt(distances)
 
                 elif knn_metric == "L2_normalized":
-                    faiss.normalize_L2(features2) 
+                    faiss.normalize_L2(features2)
                     distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
                     if knn_neighbors > 1:
                         distances = distances.mean(axis=1)
