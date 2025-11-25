@@ -201,8 +201,15 @@ def run_anomaly_detection(
                 print(f"Memory bank 2-KNN distance distribution (sampled {num_samples} features):")
                 print(f"  Mean: {neighbor_distances.mean():.4f}")
                 print(f"  Std:  {neighbor_distances.std():.4f}")
+                print(f"  95.0th percentile: {np.percentile(neighbor_distances, 95.0):.4f}")
+                print(f"  99.0th percentile: {np.percentile(neighbor_distances, 99.0):.4f}")
                 print(f"  99.5th percentile: {adaptive_threshold:.4f}")
+                print(f"  99.9th percentile: {np.percentile(neighbor_distances, 99.9):.4f}")
+                print(f"  Max: {neighbor_distances.max():.4f}")
                 print(f"Adaptive threshold set to: {adaptive_threshold:.4f} (memory bank method)")
+
+                # Store reference samples for later diagnosis
+                self_test_scores = []
             else:
                 print(f"Computing adaptive threshold from {len(img_ref_samples)} normal samples...")
                 all_patch_scores = []
@@ -270,6 +277,7 @@ def run_anomaly_detection(
         
         inference_times = {}
         anomaly_scores = {}
+        good_sample_scores = []  # Track good sample scores for diagnosis
 
         idx = 0
         # Evaluate anomalies for each anomaly type (and "good")
@@ -385,6 +393,10 @@ def run_anomaly_detection(
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
                 anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
 
+                # Track good sample scores for diagnosis
+                if type_anomaly == "good":
+                    good_sample_scores.append(final_score)
+
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]
                 if save_tiffs:
@@ -426,5 +438,17 @@ def run_anomaly_detection(
                     plt.tight_layout()
                     plt.savefig(f"{plots_dir}/{object_name}/examples/example_{type_anomaly}_{idx}.png")
                     plt.close()
+
+    # Diagnosis: Print good sample score statistics
+    if use_adaptive_threshold and len(good_sample_scores) > 0:
+        good_scores_array = np.array(good_sample_scores)
+        print(f"\n🔍 Diagnosis for {object_name}:")
+        print(f"  Adaptive threshold: {adaptive_threshold:.4f}")
+        print(f"  Good sample scores ({len(good_sample_scores)} samples):")
+        print(f"    Min:  {good_scores_array.min():.4f}")
+        print(f"    Mean: {good_scores_array.mean():.4f}")
+        print(f"    Median: {np.median(good_scores_array):.4f}")
+        print(f"    Max:  {good_scores_array.max():.4f}")
+        print(f"    Samples above threshold: {(good_scores_array >= adaptive_threshold).sum()}/{len(good_sample_scores)}")
 
     return anomaly_scores, time_memorybank, inference_times, adaptive_threshold
