@@ -8,7 +8,7 @@ import tifffile as tiff
 import time
 import torch
 
-from src.utils import augment_image, dists2map, plot_ref_images
+from src.utils import augment_image, dists2map, plot_ref_images, preprocess_image
 from src.post_eval import mean_top1p
 
 def run_anomaly_detection(
@@ -27,7 +27,9 @@ def run_anomaly_detection(
         faiss_on_cpu = False,
         seed = 0,
         save_patch_dists = True,
-        save_tiffs = False):
+        save_tiffs = False,
+        image_preprocessing = "none",
+        preprocessing_kwargs = None):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -49,7 +51,10 @@ def run_anomaly_detection(
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
-    
+
+    if preprocessing_kwargs is None:
+        preprocessing_kwargs = {}
+
     # add 'good' to the anomaly types
     type_anomalies = object_anomalies[object_name]
     type_anomalies.append('good')
@@ -81,6 +86,9 @@ def run_anomaly_detection(
             # load reference image...
             img_ref = f"{img_ref_folder}{img_ref_n}"
             image_ref = cv2.cvtColor(cv2.imread(img_ref, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+            # apply image preprocessing (if applicable)...
+            image_ref = preprocess_image(image_ref, method=image_preprocessing, **preprocessing_kwargs)
 
             # augment reference image (if applicable)...
             if rotation:
@@ -144,6 +152,10 @@ def run_anomaly_detection(
 
                 # Extract test features
                 image_test = cv2.cvtColor(cv2.imread(image_test_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+                # apply image preprocessing (if applicable)...
+                image_test = preprocess_image(image_test, method=image_preprocessing, **preprocessing_kwargs)
+
                 image_tensor2, grid_size2 = model.prepare_image(image_test)
                 features2 = model.extract_features(image_tensor2)
 

@@ -4,6 +4,71 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 
 
+def preprocess_image(img, method="none", **kwargs):
+    """
+    Apply image preprocessing techniques for anomaly detection.
+
+    Parameters:
+    - img: Input image (RGB format, numpy array)
+    - method: Preprocessing method to apply
+        - "none": No preprocessing (default)
+        - "clahe": Contrast Limited Adaptive Histogram Equalization
+        - "gamma": Gamma correction
+        - "sharpening": Image sharpening
+        - "clamp": Clamp pixel values to specified range
+    - kwargs: Additional parameters for specific methods
+        - clahe: clip_limit (default=2.0), tile_grid_size (default=8)
+        - gamma: gamma_value (default=1.0)
+        - clamp: min_value (default=0), max_value (default=255)
+
+    Returns:
+    - Preprocessed image (same shape as input)
+    """
+    if method == "none":
+        return img
+
+    elif method == "clahe":
+        clip_limit = kwargs.get("clip_limit", 2.0)
+        tile_grid_size = kwargs.get("tile_grid_size", 8)
+
+        # Convert RGB to LAB color space
+        lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+
+        # Apply CLAHE to L channel only
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_grid_size, tile_grid_size))
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+
+        # Convert back to RGB
+        img_clahe = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        return img_clahe
+
+    elif method == "gamma":
+        gamma_value = kwargs.get("gamma_value", 1.0)
+
+        # Normalize to [0, 1], apply gamma correction, then scale back
+        img_gamma = np.power(img / 255.0, gamma_value) * 255.0
+        return img_gamma.astype(np.uint8)
+
+    elif method == "sharpening":
+        # Sharpening kernel
+        kernel = np.array([[-1, -1, -1],
+                          [-1,  9, -1],
+                          [-1, -1, -1]])
+        img_sharp = cv2.filter2D(img, -1, kernel)
+        return img_sharp
+
+    elif method == "clamp":
+        min_value = kwargs.get("min_value", 0)
+        max_value = kwargs.get("max_value", 255)
+
+        # Clamp pixel values to [min_value, max_value]
+        img_clamped = np.clip(img, min_value, max_value)
+        return img_clamped.astype(np.uint8)
+
+    else:
+        raise ValueError(f"Unknown preprocessing method: {method}")
+
+
 def augment_image(img_ref, augmentation = "rotate", angles = [0, 45, 90, 135, 180, 225, 270, 315]):
     """
     Simply augmentation of images, currently just rotation.

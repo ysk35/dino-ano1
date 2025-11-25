@@ -47,6 +47,20 @@ def parse_args():
     parser.add_argument("--device", default='cuda:0')
     parser.add_argument("--warmup_iters", type=int, default=25, help="Number of warmup iterations, relevant when benchmarking inference time.")
 
+    # Image preprocessing arguments
+    parser.add_argument("--image_preprocessing", type=str, default="none",
+                        help="Image preprocessing method. Choose from ['none', 'clahe', 'gamma', 'sharpening', 'clamp'].")
+    parser.add_argument("--clahe_clip_limit", type=float, default=2.0,
+                        help="Clip limit for CLAHE preprocessing.")
+    parser.add_argument("--clahe_tile_size", type=int, default=8,
+                        help="Tile grid size for CLAHE preprocessing.")
+    parser.add_argument("--gamma_value", type=float, default=1.0,
+                        help="Gamma value for gamma correction.")
+    parser.add_argument("--clamp_min_value", type=int, default=0,
+                        help="Minimum value for clamp preprocessing.")
+    parser.add_argument("--clamp_max_value", type=int, default=255,
+                        help="Maximum value for clamp preprocessing.")
+
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
 
     args = parser.parse_args()
@@ -79,7 +93,17 @@ if __name__=="__main__":
         save_examples = args.save_examples
 
         results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
-        
+
+        # Add image preprocessing to results directory name
+        if args.image_preprocessing != "none":
+            results_dir += f"_imgprep={args.image_preprocessing}"
+            if args.image_preprocessing == "clahe":
+                results_dir += f"_clip{args.clahe_clip_limit}_tile{args.clahe_tile_size}"
+            elif args.image_preprocessing == "gamma":
+                results_dir += f"_gamma{args.gamma_value}"
+            elif args.image_preprocessing == "clamp":
+                results_dir += f"_clamp{args.clamp_min_value}-{args.clamp_max_value}"
+
         if args.tag != None:
             results_dir += "_" + args.tag
         plots_dir = results_dir
@@ -121,11 +145,26 @@ if __name__=="__main__":
                             first_image = os.listdir(f"{args.data_root}/{object_name}/train/good")[0]
                             img_tensor, grid_size = model.prepare_image(f"{args.data_root}/{object_name}/train/good/{first_image}")
                             features = model.extract_features(img_tensor)
-                                         
+
+                        # Prepare preprocessing kwargs based on the selected method
+                        preprocessing_kwargs = {}
+                        if args.image_preprocessing == "clahe":
+                            preprocessing_kwargs = {
+                                "clip_limit": args.clahe_clip_limit,
+                                "tile_grid_size": args.clahe_tile_size
+                            }
+                        elif args.image_preprocessing == "gamma":
+                            preprocessing_kwargs = {"gamma_value": args.gamma_value}
+                        elif args.image_preprocessing == "clamp":
+                            preprocessing_kwargs = {
+                                "min_value": args.clamp_min_value,
+                                "max_value": args.clamp_max_value
+                            }
+
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -138,7 +177,9 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                image_preprocessing = args.image_preprocessing,
+                                                                                preprocessing_kwargs = preprocessing_kwargs)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
