@@ -516,7 +516,6 @@ def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, s
     if output_dir is not None and seed is not None:
         threshold_file = path.join(output_dir, f"adaptive_thresholds_seed={seed}.json")
         if path.exists(threshold_file):
-            import json
             with open(threshold_file, 'r') as f:
                 adaptive_thresholds = json.load(f)
             print(f"Loaded adaptive thresholds from {threshold_file}")
