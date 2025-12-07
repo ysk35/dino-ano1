@@ -48,6 +48,8 @@ def parse_args():
     parser.add_argument("--warmup_iters", type=int, default=25, help="Number of warmup iterations, relevant when benchmarking inference time.")
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Custom output directory for results. If specified, all results go here.")
 
     # Multi-scale feature options
     parser.add_argument("--use_multiscale", default=False, action=argparse.BooleanOptionalAction,
@@ -87,15 +89,20 @@ if __name__=="__main__":
     for shot in list(args.shots):
         save_examples = args.save_examples
 
-        results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
+        if args.output_dir:
+            # Use custom output directory
+            results_dir = args.output_dir
+            os.makedirs(results_dir, exist_ok=True)
+        else:
+            results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
 
-        if args.use_multiscale and args.layers:
-            layers_str = "_".join(map(str, args.layers))
-            weights_str = "_".join(f"{w:.1f}" for w in args.layer_weights) if args.layer_weights else "equal"
-            results_dir += f"_layers={layers_str}_w={weights_str}"
+            if args.use_multiscale and args.layers:
+                layers_str = "_".join(map(str, args.layers))
+                weights_str = "_".join(f"{w:.1f}" for w in args.layer_weights) if args.layer_weights else "equal"
+                results_dir += f"_layers={layers_str}_w={weights_str}"
 
-        if args.tag != None:
-            results_dir += "_" + args.tag
+            if args.tag != None:
+                results_dir += "_" + args.tag
         plots_dir = results_dir
         os.makedirs(f"{results_dir}", exist_ok=True)
         
