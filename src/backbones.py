@@ -122,15 +122,37 @@ class DINOv2Wrapper(VisionTransformerWrapper):
         return image_tensor, grid_size
     
 
-    def extract_features(self, image_tensor):
+    def extract_features(self, image_tensor, layers=None):
+        """
+        Extract features from specified layers.
+
+        Args:
+            image_tensor: Input image tensor
+            layers: List of layer indices to extract (e.g., [6, 12] for layers 6 and 12).
+                    If None, extracts from the last layer only.
+                    Layer indices are 1-based (1 to num_layers).
+
+        Returns:
+            If layers is None: numpy array of shape (num_patches, dim)
+            If layers is list: dict mapping layer index to numpy array
+        """
         with torch.inference_mode():
             if self.half_precision:
                 image_batch = image_tensor.unsqueeze(0).half().to(self.device)
             else:
                 image_batch = image_tensor.unsqueeze(0).to(self.device)
 
-            tokens = self.model.get_intermediate_layers(image_batch)[0].squeeze()
-        return tokens.cpu().numpy()
+            if layers is None:
+                # Default: extract from last layer only
+                tokens = self.model.get_intermediate_layers(image_batch)[0].squeeze()
+                return tokens.cpu().numpy()
+            else:
+                # Extract from multiple specified layers
+                all_tokens = self.model.get_intermediate_layers(image_batch, n=layers)
+                result = {}
+                for i, layer_idx in enumerate(layers):
+                    result[layer_idx] = all_tokens[i].squeeze().cpu().numpy()
+                return result
 
 
     def get_embedding_visualization(self, tokens, grid_size, resized_mask=None, normalize=True):

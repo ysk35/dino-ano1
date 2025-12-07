@@ -49,6 +49,15 @@ def parse_args():
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
 
+    # Multi-scale feature options
+    parser.add_argument("--use_multiscale", default=False, action=argparse.BooleanOptionalAction,
+                        help="Use multi-scale feature fusion from different layers.")
+    parser.add_argument("--layers", nargs='+', type=int, default=None,
+                        help="Layer indices to extract features from (e.g., --layers 6 12). "
+                             "For dinov2_vits14/vitb14: 1-12, vitl14: 1-24, vitg14: 1-40")
+    parser.add_argument("--layer_weights", nargs='+', type=float, default=None,
+                        help="Weights for each layer (must sum to 1). E.g., --layer_weights 0.3 0.7")
+
     args = parser.parse_args()
     return args
 
@@ -79,7 +88,12 @@ if __name__=="__main__":
         save_examples = args.save_examples
 
         results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
-        
+
+        if args.use_multiscale and args.layers:
+            layers_str = "_".join(map(str, args.layers))
+            weights_str = "_".join(f"{w:.1f}" for w in args.layer_weights) if args.layer_weights else "equal"
+            results_dir += f"_layers={layers_str}_w={weights_str}"
+
         if args.tag != None:
             results_dir += "_" + args.tag
         plots_dir = results_dir
@@ -125,7 +139,7 @@ if __name__=="__main__":
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -138,7 +152,10 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                use_multiscale = args.use_multiscale,
+                                                                                layers = args.layers,
+                                                                                layer_weights = args.layer_weights)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
