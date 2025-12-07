@@ -148,10 +148,14 @@ class DINOv2Wrapper(VisionTransformerWrapper):
                 return tokens.cpu().numpy()
             else:
                 # Extract from multiple specified layers
-                all_tokens = self.model.get_intermediate_layers(image_batch, n=layers)
+                # DINOv2's get_intermediate_layers expects layer indices (0-indexed internally)
+                # We need to call it for each layer separately
                 result = {}
-                for i, layer_idx in enumerate(layers):
-                    result[layer_idx] = all_tokens[i].squeeze().cpu().numpy()
+                for layer_idx in layers:
+                    # n parameter: get last n layers, so we get all layers up to layer_idx
+                    # then take the last one which corresponds to layer_idx
+                    tokens = self.model.get_intermediate_layers(image_batch, n=layer_idx)
+                    result[layer_idx] = tokens[-1].squeeze().cpu().numpy()
                 return result
 
 
