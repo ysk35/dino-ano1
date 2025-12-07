@@ -59,13 +59,18 @@ class ViTWrapper(VisionTransformerWrapper):
         img_tensor = self.transform(img).unsqueeze(0)
         return img_tensor, self.grid_size
 
-    def extract_features(self, img_tensor):
+    def extract_features(self, img_tensor, return_cls_token=False):
         with torch.no_grad():
             img_tensor = img_tensor.to(self.device)
             patches = self.model._process_input(img_tensor)
             class_token = self.model.class_token.expand(patches.size(0), -1, -1)
             patches = torch.cat((class_token, patches), dim=1)
             patch_features = self.model.encoder(patches)
+
+            if return_cls_token:
+                cls_token = patch_features[:, 0, :].squeeze().cpu().numpy()
+                patch_tokens = patch_features[:, 1:, :].squeeze().cpu().numpy()
+                return patch_tokens, cls_token
             return patch_features[:, 1:, :].squeeze().cpu().numpy()  # Exclude the class token
 
     def get_embedding_visualization(self, tokens, grid_size = (14,14), resized_mask=None, normalize=True):
@@ -122,15 +127,21 @@ class DINOv2Wrapper(VisionTransformerWrapper):
         return image_tensor, grid_size
     
 
-    def extract_features(self, image_tensor):
+    def extract_features(self, image_tensor, return_cls_token=False):
         with torch.inference_mode():
             if self.half_precision:
                 image_batch = image_tensor.unsqueeze(0).half().to(self.device)
             else:
                 image_batch = image_tensor.unsqueeze(0).to(self.device)
 
-            tokens = self.model.get_intermediate_layers(image_batch)[0].squeeze()
-        return tokens.cpu().numpy()
+            # Get features with CLS token
+            features = self.model.get_intermediate_layers(image_batch, return_class_token=True)[0]
+            patch_tokens = features[0].squeeze()  # Patch tokens
+            cls_token = features[1].squeeze()     # CLS token
+
+        if return_cls_token:
+            return patch_tokens.cpu().numpy(), cls_token.cpu().numpy()
+        return patch_tokens.cpu().numpy()
 
 
     def get_embedding_visualization(self, tokens, grid_size, resized_mask=None, normalize=True):

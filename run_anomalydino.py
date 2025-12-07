@@ -49,6 +49,12 @@ def parse_args():
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
 
+    # CLS Token options
+    parser.add_argument("--use_cls_token", default=False, action=argparse.BooleanOptionalAction,
+                        help="Use CLS token for global anomaly detection (captures structural anomalies).")
+    parser.add_argument("--cls_weight", type=float, default=0.3,
+                        help="Weight for CLS token score (0-1). Higher = more global features. Default: 0.3")
+
     args = parser.parse_args()
     return args
 
@@ -79,7 +85,10 @@ if __name__=="__main__":
         save_examples = args.save_examples
 
         results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
-        
+
+        if args.use_cls_token:
+            results_dir += f"_cls={args.cls_weight}"
+
         if args.tag != None:
             results_dir += "_" + args.tag
         plots_dir = results_dir
@@ -125,7 +134,7 @@ if __name__=="__main__":
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -138,7 +147,9 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                use_cls_token = args.use_cls_token,
+                                                                                cls_weight = args.cls_weight)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):

@@ -27,7 +27,9 @@ def run_anomaly_detection(
         faiss_on_cpu = False,
         seed = 0,
         save_patch_dists = True,
-        save_tiffs = False):
+        save_tiffs = False,
+        use_cls_token = False,
+        cls_weight = 0.3):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -46,6 +48,8 @@ def run_anomaly_detection(
     - seed: The seed value for deterministic sampling in few-shot setting. Default is 0.
     - save_patch_dists: Whether to save the patch distances. Default is True. Required to eval detection.
     - save_tiffs: Whether to save the anomaly maps as TIFF files. Default is False. Required to eval segmentation.
+    - use_cls_token: Whether to use CLS token for global anomaly detection. Default is False.
+    - cls_weight: Weight for CLS token score in final score (0-1). Default is 0.3.
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
@@ -59,6 +63,7 @@ def run_anomaly_detection(
 
     # Extract reference features
     features_ref = []
+    cls_tokens_ref = []  # CLS tokens for global features
     images_ref = []
     masks_ref = []
     vis_backgroud = []
@@ -90,8 +95,14 @@ def run_anomaly_detection(
             for i in range(len(img_augmented)):
                 image_ref = img_augmented[i]
                 image_ref_tensor, grid_size1 = model.prepare_image(image_ref)
-                features_ref_i = model.extract_features(image_ref_tensor)
-                
+
+                # Extract features (with CLS token if enabled)
+                if use_cls_token:
+                    features_ref_i, cls_token_i = model.extract_features(image_ref_tensor, return_cls_token=True)
+                    cls_tokens_ref.append(cls_token_i)
+                else:
+                    features_ref_i = model.extract_features(image_ref_tensor)
+
                 # compute background mask and discard background patches
                 mask_ref = model.compute_background_mask(features_ref_i, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
                 features_ref.append(features_ref_i[mask_ref])
@@ -117,6 +128,19 @@ def run_anomaly_detection(
         if knn_metric == "L2_normalized":
             faiss.normalize_L2(features_ref)
         knn_index.add(features_ref)
+
+        # Build CLS token index if enabled
+        cls_index = None
+        if use_cls_token and cls_tokens_ref:
+            cls_tokens_ref = np.stack(cls_tokens_ref, axis=0).astype('float32')
+            if faiss_on_cpu:
+                cls_index = faiss.IndexFlatL2(cls_tokens_ref.shape[1])
+            else:
+                cls_index = faiss.GpuIndexFlatL2(res, cls_tokens_ref.shape[1])
+            if knn_metric == "L2_normalized":
+                faiss.normalize_L2(cls_tokens_ref)
+            cls_index.add(cls_tokens_ref)
+            print(f"  CLS token memory bank: {cls_tokens_ref.shape[0]} tokens")
 
         # end measuring time (for memory bank set up; in seconds, same for all test samples of this object)
         time_memorybank = time.time() - start_time
@@ -145,7 +169,12 @@ def run_anomaly_detection(
                 # Extract test features
                 image_test = cv2.cvtColor(cv2.imread(image_test_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
                 image_tensor2, grid_size2 = model.prepare_image(image_test)
-                features2 = model.extract_features(image_tensor2)
+
+                # Extract features (with CLS token if enabled)
+                if use_cls_token:
+                    features2, cls_token_test = model.extract_features(image_tensor2, return_cls_token=True)
+                else:
+                    features2 = model.extract_features(image_tensor2)
 
                 # Compute background mask
                 if masking:
@@ -176,11 +205,26 @@ def run_anomaly_detection(
                 output_distances[mask2] = distances.squeeze()
                 d_masked = output_distances.reshape(grid_size2)
                 
+                # Compute anomaly score
+                patch_score = mean_top1p(output_distances.flatten())
+
+                # Compute CLS token score if enabled
+                if use_cls_token and cls_index is not None:
+                    cls_token_query = cls_token_test.reshape(1, -1).astype('float32')
+                    if knn_metric == "L2_normalized":
+                        faiss.normalize_L2(cls_token_query)
+                    cls_distances, _ = cls_index.search(cls_token_query, k=1)
+                    cls_score = np.sqrt(cls_distances[0, 0]) if knn_metric == "L2" else cls_distances[0, 0] / 2
+                    # Combine patch and CLS scores
+                    final_score = (1 - cls_weight) * patch_score + cls_weight * cls_score
+                else:
+                    final_score = patch_score
+
                 # save inference time
                 torch.cuda.synchronize() # Synchronize CUDA kernels before measuring time
                 inf_time = time.time() - start_time
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
-                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = mean_top1p(output_distances.flatten())
+                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
 
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]
