@@ -113,18 +113,21 @@ def run_anomaly_detection(
                     mask_ref = model.compute_background_mask(features_for_mask, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
                     for layer in layers:
                         features_ref[layer].append(features_dict[layer][mask_ref])
+                    if save_examples:
+                        images_ref.append(image_ref)
+                        vis_image_background = model.get_embedding_visualization(features_for_mask, grid_size1, mask_ref)
+                        masks_ref.append(mask_ref)
+                        vis_backgroud.append(vis_image_background)
                 else:
                     features_ref_i = model.extract_features(image_ref_tensor)
                     # compute background mask and discard background patches
                     mask_ref = model.compute_background_mask(features_ref_i, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
                     features_ref.append(features_ref_i[mask_ref])
-                if save_examples:
-                    images_ref.append(image_ref)
-                    # Use last layer features for visualization
-                    vis_features = features_dict[layers[-1]] if use_multiscale else features_ref_i
-                    vis_image_background = model.get_embedding_visualization(vis_features, grid_size1, mask_ref)
-                    masks_ref.append(mask_ref)
-                    vis_backgroud.append(vis_image_background)
+                    if save_examples:
+                        images_ref.append(image_ref)
+                        vis_image_background = model.get_embedding_visualization(features_ref_i, grid_size1, mask_ref)
+                        masks_ref.append(mask_ref)
+                        vis_backgroud.append(vis_image_background)
         
         # Build kNN index (single or multi-scale)
         if use_multiscale:
@@ -140,7 +143,7 @@ def run_anomaly_detection(
                 if knn_metric == "L2_normalized":
                     faiss.normalize_L2(layer_features)
                 knn_indices[layer].add(layer_features)
-                print(f"    Layer {layer}: {layer_features.shape[0]} patches in memory bank")
+                print(f"    Layer {layer}: {layer_features.shape[0]} patches, dim={layer_features.shape[1]}")
         else:
             features_ref = np.concatenate(features_ref, axis=0).astype('float32')
             if faiss_on_cpu:
@@ -184,53 +187,50 @@ def run_anomaly_detection(
                 image_tensor2, grid_size2 = model.prepare_image(image_test)
 
                 if use_multiscale:
+                    # Extract features from multiple layers
                     features_dict2 = model.extract_features(image_tensor2, layers=layers)
-                    features2_for_mask = features_dict2[layers[-1]]
-                else:
-                    features2 = model.extract_features(image_tensor2)
-                    features2_for_mask = features2
+                    features_for_mask2 = features_dict2[layers[-1]]
 
-                # Compute background mask
-                if masking:
-                    mask2 = model.compute_background_mask(features2_for_mask, grid_size2, threshold=10, masking_type=masking)
-                else:
-                    mask2 = np.ones(features2_for_mask.shape[0], dtype=bool)
-                if save_examples and idx < 3:
-                    vis_image_test_background = model.get_embedding_visualization(features2_for_mask, grid_size2, mask2)
+                    # Compute background mask using last layer
+                    if masking:
+                        mask2 = model.compute_background_mask(features_for_mask2, grid_size2, threshold=10, masking_type=masking)
+                    else:
+                        mask2 = np.ones(features_for_mask2.shape[0], dtype=bool)
+                    if save_examples and idx < 3:
+                        vis_image_test_background = model.get_embedding_visualization(features_for_mask2, grid_size2, mask2)
 
-                if use_multiscale:
-                    # Compute distances for each layer and combine with weights
-                    layer_scores = []
-                    d_masked = None  # Will use the last layer for visualization
-
+                    # Compute distances for each layer and fuse
+                    fused_distances = np.zeros(mask2.sum(), dtype=float)
                     for layer_idx, layer in enumerate(layers):
                         layer_features = features_dict2[layer][mask2].astype('float32')
 
                         if knn_metric == "L2":
-                            distances, _ = knn_indices[layer].search(layer_features, k=knn_neighbors)
+                            layer_distances, _ = knn_indices[layer].search(layer_features, k=knn_neighbors)
                             if knn_neighbors > 1:
-                                distances = distances.mean(axis=1)
-                            distances = np.sqrt(distances)
+                                layer_distances = layer_distances.mean(axis=1)
+                            layer_distances = np.sqrt(layer_distances)
                         elif knn_metric == "L2_normalized":
                             faiss.normalize_L2(layer_features)
-                            distances, _ = knn_indices[layer].search(layer_features, k=knn_neighbors)
+                            layer_distances, _ = knn_indices[layer].search(layer_features, k=knn_neighbors)
                             if knn_neighbors > 1:
-                                distances = distances.mean(axis=1)
-                            distances = distances / 2
+                                layer_distances = layer_distances.mean(axis=1)
+                            layer_distances = layer_distances / 2
 
-                        output_distances = np.zeros_like(mask2, dtype=float)
-                        output_distances[mask2] = distances.squeeze()
+                        # Weighted fusion
+                        fused_distances += layer_weights[layer_idx] * layer_distances.squeeze()
 
-                        # Compute layer score
-                        layer_score = mean_top1p(output_distances.flatten())
-                        layer_scores.append(layer_score * layer_weights[layer_idx])
-
-                        # Use last layer for visualization
-                        if layer_idx == len(layers) - 1:
-                            d_masked = output_distances.reshape(grid_size2)
-
-                    final_score = sum(layer_scores)
+                    distances = fused_distances
                 else:
+                    features2 = model.extract_features(image_tensor2)
+
+                    # Compute background mask
+                    if masking:
+                        mask2 = model.compute_background_mask(features2, grid_size2, threshold=10, masking_type=masking)
+                    else:
+                        mask2 = np.ones(features2.shape[0], dtype=bool)
+                    if save_examples and idx < 3:
+                        vis_image_test_background = model.get_embedding_visualization(features2, grid_size2, mask2)
+
                     # Discard irrelevant features
                     features2 = features2[mask2]
 
@@ -240,7 +240,6 @@ def run_anomaly_detection(
                         if knn_neighbors > 1:
                             distances = distances.mean(axis=1)
                         distances = np.sqrt(distances)
-
                     elif knn_metric == "L2_normalized":
                         faiss.normalize_L2(features2)
                         distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
@@ -248,16 +247,15 @@ def run_anomaly_detection(
                             distances = distances.mean(axis=1)
                         distances = distances / 2   # equivalent to cosine distance (1 - cosine similarity)
 
-                    output_distances = np.zeros_like(mask2, dtype=float)
-                    output_distances[mask2] = distances.squeeze()
-                    d_masked = output_distances.reshape(grid_size2)
-                    final_score = mean_top1p(output_distances.flatten())
-
+                output_distances = np.zeros_like(mask2, dtype=float)
+                output_distances[mask2] = distances.squeeze()
+                d_masked = output_distances.reshape(grid_size2)
+                
                 # save inference time
                 torch.cuda.synchronize() # Synchronize CUDA kernels before measuring time
                 inf_time = time.time() - start_time
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
-                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
+                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = mean_top1p(output_distances.flatten())
 
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]

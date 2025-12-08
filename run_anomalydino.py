@@ -51,9 +51,9 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Custom output directory for results. If specified, all results go here.")
 
-    # Multi-scale feature options
+    # Multiscale options
     parser.add_argument("--use_multiscale", default=False, action=argparse.BooleanOptionalAction,
-                        help="Use multi-scale feature fusion from different layers.")
+                        help="Use multi-scale feature fusion from multiple DINOv2 layers.")
     parser.add_argument("--layers", nargs='+', type=int, default=None,
                         help="Layer indices to extract features from (e.g., --layers 6 12). "
                              "For dinov2_vits14/vitb14: 1-12, vitl14: 1-24, vitg14: 1-40")
@@ -97,9 +97,8 @@ if __name__=="__main__":
             results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
 
             if args.use_multiscale and args.layers:
-                layers_str = "_".join(map(str, args.layers))
-                weights_str = "_".join(f"{w:.1f}" for w in args.layer_weights) if args.layer_weights else "equal"
-                results_dir += f"_layers={layers_str}_w={weights_str}"
+                layers_str = "_".join(str(l) for l in args.layers)
+                results_dir += f"_multiscale_L{layers_str}"
 
             if args.tag != None:
                 results_dir += "_" + args.tag
@@ -116,7 +115,10 @@ if __name__=="__main__":
 
         if args.faiss_on_cpu:
             print("Warning: Running similarity search on CPU. Consider using faiss-gpu for faster inference.")
-        
+
+        if args.use_multiscale:
+            print(f"Multiscale mode: layers={args.layers}, weights={args.layer_weights}")
+
         print("Results will be saved to", results_dir)
     
         for seed in seeds:
