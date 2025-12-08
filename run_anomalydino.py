@@ -49,7 +49,8 @@ def parse_args():
 
     # Image preprocessing arguments
     parser.add_argument("--image_preprocessing", type=str, default="none",
-                        help="Image preprocessing method. Choose from ['none', 'clahe', 'gamma', 'sharpening', 'clamp'].")
+                        help="Image preprocessing method. Choose from ['none', 'clahe', 'gamma', 'sharpening', 'clamp']. "
+                             "Can combine with '+' (e.g., 'gamma+clahe' applies gamma first, then clahe).")
     parser.add_argument("--clahe_clip_limit", type=float, default=2.0,
                         help="Clip limit for CLAHE preprocessing.")
     parser.add_argument("--clahe_tile_size", type=int, default=8,
@@ -107,11 +108,13 @@ if __name__=="__main__":
             # Add image preprocessing to results directory name
             if args.image_preprocessing != "none":
                 results_dir += f"_imgprep={args.image_preprocessing}"
-                if args.image_preprocessing == "clahe":
-                    results_dir += f"_clip{args.clahe_clip_limit}_tile{args.clahe_tile_size}"
-                elif args.image_preprocessing == "gamma":
+                # Add parameters for each preprocessing method used
+                preproc_methods = args.image_preprocessing.split("+")
+                if "clahe" in preproc_methods:
+                    results_dir += f"_clip{args.clahe_clip_limit}"
+                if "gamma" in preproc_methods:
                     results_dir += f"_gamma{args.gamma_value}"
-                elif args.image_preprocessing == "clamp":
+                if "clamp" in preproc_methods:
                     results_dir += f"_clamp{args.clamp_min_value}-{args.clamp_max_value}"
 
             # Add rotation augmentation to results directory name

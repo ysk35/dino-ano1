@@ -10,12 +10,14 @@ def preprocess_image(img, method="none", **kwargs):
 
     Parameters:
     - img: Input image (RGB format, numpy array)
-    - method: Preprocessing method to apply
+    - method: Preprocessing method to apply (string or list of strings)
         - "none": No preprocessing (default)
         - "clahe": Contrast Limited Adaptive Histogram Equalization
         - "gamma": Gamma correction
         - "sharpening": Image sharpening
         - "clamp": Clamp pixel values to specified range
+        - Can also be a list like ["gamma", "clahe"] to apply multiple in order
+        - Or a string like "gamma+clahe" which will be split and applied in order
     - kwargs: Additional parameters for specific methods
         - clahe: clip_limit (default=2.0), tile_grid_size (default=8)
         - gamma: gamma_value (default=1.0)
@@ -24,6 +26,24 @@ def preprocess_image(img, method="none", **kwargs):
     Returns:
     - Preprocessed image (same shape as input)
     """
+    # Handle combination of methods
+    if isinstance(method, str) and "+" in method:
+        methods = method.split("+")
+    elif isinstance(method, list):
+        methods = method
+    else:
+        methods = [method]
+
+    # Apply each method in sequence
+    result = img
+    for m in methods:
+        result = _apply_single_preprocess(result, m, **kwargs)
+
+    return result
+
+
+def _apply_single_preprocess(img, method, **kwargs):
+    """Apply a single preprocessing method."""
     if method == "none":
         return img
 
