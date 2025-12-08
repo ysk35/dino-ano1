@@ -11,6 +11,22 @@ import torch
 from src.utils import augment_image, dists2map, plot_ref_images
 from src.post_eval import mean_top1p
 
+def apply_local_smoothing(distances_2d, kernel_size=3):
+    """
+    Apply local neighborhood smoothing to patch distances.
+    This helps reduce noise and capture local context.
+
+    Args:
+        distances_2d: 2D array of patch distances (grid_size)
+        kernel_size: Size of the smoothing kernel (default 3x3)
+
+    Returns:
+        Smoothed distances
+    """
+    from scipy.ndimage import uniform_filter
+    return uniform_filter(distances_2d, size=kernel_size, mode='reflect')
+
+
 def run_anomaly_detection(
         model,
         object_name,
@@ -27,7 +43,10 @@ def run_anomaly_detection(
         faiss_on_cpu = False,
         seed = 0,
         save_patch_dists = True,
-        save_tiffs = False):
+        save_tiffs = False,
+        score_aggregation = 'mean_top1p',
+        local_smoothing = False,
+        smoothing_kernel = 3):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -46,6 +65,9 @@ def run_anomaly_detection(
     - seed: The seed value for deterministic sampling in few-shot setting. Default is 0.
     - save_patch_dists: Whether to save the patch distances. Default is True. Required to eval detection.
     - save_tiffs: Whether to save the anomaly maps as TIFF files. Default is False. Required to eval segmentation.
+    - score_aggregation: Method to aggregate patch scores. Options: 'mean_top1p', 'max', 'mean_top5p'. Default is 'mean_top1p'.
+    - local_smoothing: Whether to apply local neighborhood smoothing. Default is False.
+    - smoothing_kernel: Kernel size for local smoothing. Default is 3.
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
@@ -175,12 +197,32 @@ def run_anomaly_detection(
                 output_distances = np.zeros_like(mask2, dtype=float)
                 output_distances[mask2] = distances.squeeze()
                 d_masked = output_distances.reshape(grid_size2)
-                
+
+                # Apply local smoothing if enabled
+                if local_smoothing:
+                    d_masked = apply_local_smoothing(d_masked, kernel_size=smoothing_kernel)
+                    output_distances = d_masked.flatten()
+
+                # Compute anomaly score with selected aggregation method
+                if score_aggregation == 'mean_top1p':
+                    final_score = mean_top1p(output_distances.flatten())
+                elif score_aggregation == 'mean_top5p':
+                    # Mean of top 5% - more robust to outliers
+                    n_top = max(1, int(len(output_distances.flatten()) * 0.05))
+                    final_score = np.mean(np.sort(output_distances.flatten())[-n_top:])
+                elif score_aggregation == 'max':
+                    final_score = np.max(output_distances.flatten())
+                elif score_aggregation == 'median_top10':
+                    # Median of top 10 distances - robust to outliers
+                    final_score = np.median(np.sort(output_distances.flatten())[-10:])
+                else:
+                    final_score = mean_top1p(output_distances.flatten())
+
                 # save inference time
                 torch.cuda.synchronize() # Synchronize CUDA kernels before measuring time
                 inf_time = time.time() - start_time
                 inference_times[f"{type_anomaly}/{img_test_nr}"] = inf_time
-                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = mean_top1p(output_distances.flatten())
+                anomaly_scores[f"{type_anomaly}/{img_test_nr}"] = final_score
 
                 # Save the anomaly maps (raw as .npy or full resolution .tiff files)
                 img_test_nr = img_test_nr.split(".")[0]

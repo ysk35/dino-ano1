@@ -51,6 +51,15 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Custom output directory for results. If specified, all results go here.")
 
+    # Scoring improvements
+    parser.add_argument("--score_aggregation", type=str, default="mean_top1p",
+                        choices=["mean_top1p", "mean_top5p", "max", "median_top10"],
+                        help="Method to aggregate patch scores. Default: mean_top1p")
+    parser.add_argument("--local_smoothing", default=False, action=argparse.BooleanOptionalAction,
+                        help="Apply local neighborhood smoothing to patch distances.")
+    parser.add_argument("--smoothing_kernel", type=int, default=3,
+                        help="Kernel size for local smoothing. Default: 3")
+
     args = parser.parse_args()
     return args
 
@@ -132,7 +141,7 @@ if __name__=="__main__":
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
-                                                                                data_root = args.data_root, 
+                                                                                data_root = args.data_root,
                                                                                 n_ref_samples = shot,
                                                                                 object_anomalies = object_anomalies,
                                                                                 plots_dir = plots_dir,
@@ -145,7 +154,10 @@ if __name__=="__main__":
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
                                                                                 save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm)      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                score_aggregation = args.score_aggregation,
+                                                                                local_smoothing = args.local_smoothing,
+                                                                                smoothing_kernel = args.smoothing_kernel)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
