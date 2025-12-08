@@ -217,6 +217,9 @@ def run_anomaly_detection(
                     cls_score = np.sqrt(cls_distances[0, 0]) if knn_metric == "L2" else cls_distances[0, 0] / 2
                     # Combine patch and CLS scores
                     final_score = (1 - cls_weight) * patch_score + cls_weight * cls_score
+                    # Debug: show first few samples' scores
+                    if idx < 3:
+                        print(f"    [CLS Debug] {type_anomaly}/{img_test_nr}: patch={patch_score:.4f}, cls={cls_score:.4f}, final={final_score:.4f}")
                 else:
                     final_score = patch_score
 
