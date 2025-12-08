@@ -60,6 +60,21 @@ def parse_args():
     parser.add_argument("--smoothing_kernel", type=int, default=3,
                         help="Kernel size for local smoothing. Default: 3")
 
+    # Feature transformation
+    parser.add_argument("--use_pca_whitening", default=False, action=argparse.BooleanOptionalAction,
+                        help="Apply PCA Whitening to decorrelate and normalize features.")
+    parser.add_argument("--pca_components", type=int, default=256,
+                        help="Number of PCA components. Default: 256")
+
+    # Memory bank optimization
+    parser.add_argument("--use_coreset", default=False, action=argparse.BooleanOptionalAction,
+                        help="Apply coreset subsampling to reduce memory bank size.")
+    parser.add_argument("--coreset_ratio", type=float, default=0.1,
+                        help="Fraction of patches to keep (0.0-1.0). Default: 0.1 (10%%)")
+    parser.add_argument("--coreset_method", type=str, default="greedy",
+                        choices=["greedy", "random"],
+                        help="Coreset sampling method. 'greedy' provides better coverage. Default: greedy")
+
     args = parser.parse_args()
     return args
 
@@ -153,11 +168,16 @@ if __name__=="__main__":
                                                                                 mask_ref_images = args.mask_ref_images,
                                                                                 rotation = rotation_default[object_name],
                                                                                 seed = seed,
-                                                                                save_patch_dists = args.eval_clf, # save patch distances for detection evaluation
-                                                                                save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
+                                                                                save_patch_dists = args.eval_clf,
+                                                                                save_tiffs = args.eval_segm,
                                                                                 score_aggregation = args.score_aggregation,
                                                                                 local_smoothing = args.local_smoothing,
-                                                                                smoothing_kernel = args.smoothing_kernel)
+                                                                                smoothing_kernel = args.smoothing_kernel,
+                                                                                use_pca_whitening = args.use_pca_whitening,
+                                                                                pca_components = args.pca_components,
+                                                                                use_coreset = args.use_coreset,
+                                                                                coreset_ratio = args.coreset_ratio,
+                                                                                coreset_method = args.coreset_method)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):

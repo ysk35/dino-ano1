@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-import os 
+import os
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -7,9 +7,90 @@ import faiss
 import tifffile as tiff
 import time
 import torch
+from sklearn.decomposition import PCA
 
 from src.utils import augment_image, dists2map, plot_ref_images
 from src.post_eval import mean_top1p
+
+
+def apply_pca_whitening(features, n_components=256):
+    """
+    Apply PCA Whitening to features.
+    This decorrelates features and normalizes variance, improving kNN distance.
+
+    Args:
+        features: numpy array of shape (n_samples, n_features)
+        n_components: Number of PCA components to keep. Default 256.
+
+    Returns:
+        pca: Fitted PCA object (for transforming test features)
+        transformed_features: Whitened features
+    """
+    n_components = min(n_components, features.shape[0], features.shape[1])
+    pca = PCA(n_components=n_components, whiten=True)
+    transformed = pca.fit_transform(features)
+    explained_var = pca.explained_variance_ratio_.sum()
+    print(f"    PCA Whitening: {features.shape[1]}D → {n_components}D (explained variance: {explained_var:.2%})")
+    return pca, transformed.astype('float32')
+
+
+def apply_coreset_subsampling(features, sampling_ratio=0.1, method='greedy'):
+    """
+    Apply coreset subsampling to reduce memory bank size while preserving coverage.
+
+    Args:
+        features: numpy array of shape (n_samples, n_features)
+        sampling_ratio: Fraction of features to keep (0.0-1.0). Default 0.1 (10%)
+        method: 'greedy' for greedy furthest point sampling, 'random' for random sampling
+
+    Returns:
+        selected_features: Subsampled features
+        selected_indices: Indices of selected features
+    """
+    n_samples = features.shape[0]
+    n_select = max(1, int(n_samples * sampling_ratio))
+
+    if n_select >= n_samples:
+        return features, np.arange(n_samples)
+
+    if method == 'random':
+        indices = np.random.choice(n_samples, n_select, replace=False)
+        return features[indices], indices
+
+    elif method == 'greedy':
+        # Greedy furthest point sampling (minimax facility location)
+        # This provides better coverage of feature space than random sampling
+        selected_indices = []
+        remaining = set(range(n_samples))
+
+        # Start with random point
+        first_idx = np.random.randint(n_samples)
+        selected_indices.append(first_idx)
+        remaining.remove(first_idx)
+
+        # Compute distances from first point
+        min_distances = np.linalg.norm(features - features[first_idx], axis=1)
+
+        for _ in range(n_select - 1):
+            if not remaining:
+                break
+            # Select point with maximum minimum distance to selected set
+            remaining_list = list(remaining)
+            furthest_idx = remaining_list[np.argmax(min_distances[remaining_list])]
+            selected_indices.append(furthest_idx)
+            remaining.remove(furthest_idx)
+
+            # Update minimum distances
+            new_distances = np.linalg.norm(features - features[furthest_idx], axis=1)
+            min_distances = np.minimum(min_distances, new_distances)
+
+        selected_indices = np.array(selected_indices)
+        print(f"    Coreset: {n_samples} → {len(selected_indices)} patches ({sampling_ratio:.0%})")
+        return features[selected_indices], selected_indices
+
+    else:
+        raise ValueError(f"Unknown coreset method: {method}")
+
 
 def apply_local_smoothing(distances_2d, kernel_size=3):
     """
@@ -46,7 +127,12 @@ def run_anomaly_detection(
         save_tiffs = False,
         score_aggregation = 'mean_top1p',
         local_smoothing = False,
-        smoothing_kernel = 3):
+        smoothing_kernel = 3,
+        use_pca_whitening = False,
+        pca_components = 256,
+        use_coreset = False,
+        coreset_ratio = 0.1,
+        coreset_method = 'greedy'):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -68,6 +154,11 @@ def run_anomaly_detection(
     - score_aggregation: Method to aggregate patch scores. Options: 'mean_top1p', 'max', 'mean_top5p'. Default is 'mean_top1p'.
     - local_smoothing: Whether to apply local neighborhood smoothing. Default is False.
     - smoothing_kernel: Kernel size for local smoothing. Default is 3.
+    - use_pca_whitening: Whether to apply PCA Whitening to features. Default is False.
+    - pca_components: Number of PCA components. Default is 256.
+    - use_coreset: Whether to apply coreset subsampling. Default is False.
+    - coreset_ratio: Fraction of patches to keep (0.0-1.0). Default is 0.1.
+    - coreset_method: 'greedy' or 'random'. Default is 'greedy'.
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
@@ -124,17 +215,26 @@ def run_anomaly_detection(
                     vis_backgroud.append(vis_image_background)
         
         features_ref = np.concatenate(features_ref, axis=0).astype('float32')
+        print(f"  Memory bank: {features_ref.shape[0]} patches, {features_ref.shape[1]}D")
+
+        # Apply PCA Whitening if enabled
+        pca_model = None
+        if use_pca_whitening:
+            pca_model, features_ref = apply_pca_whitening(features_ref, n_components=pca_components)
+
+        # Apply Coreset Subsampling if enabled
+        if use_coreset:
+            features_ref, _ = apply_coreset_subsampling(
+                features_ref, sampling_ratio=coreset_ratio, method=coreset_method
+            )
 
         if faiss_on_cpu:
-            # similariy search on CPU
+            # similarity search on CPU
             knn_index = faiss.IndexFlatL2(features_ref.shape[1])
         else:
-            # similariy search on GPU
+            # similarity search on GPU
             res = faiss.StandardGpuResources()
             knn_index = faiss.GpuIndexFlatL2(res, features_ref.shape[1])
-            # knn_index = faiss.IndexFlatL2(features_ref.shape[1])
-            # knn_index = faiss.index_cpu_to_gpu(res, int(model.device[-1]), knn_index)
-
 
         if knn_metric == "L2_normalized":
             faiss.normalize_L2(features_ref)
@@ -180,6 +280,10 @@ def run_anomaly_detection(
                 # Discard irrelevant features
                 features2 = features2[mask2]
 
+                # Apply PCA transformation if enabled (using fitted model from training)
+                if use_pca_whitening and pca_model is not None:
+                    features2 = pca_model.transform(features2).astype('float32')
+
                 # Compute distances to nearest neighbors in M
                 if knn_metric == "L2":
                     distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
@@ -188,7 +292,7 @@ def run_anomaly_detection(
                     distances = np.sqrt(distances)
 
                 elif knn_metric == "L2_normalized":
-                    faiss.normalize_L2(features2) 
+                    faiss.normalize_L2(features2)
                     distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
                     if knn_neighbors > 1:
                         distances = distances.mean(axis=1)
