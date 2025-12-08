@@ -131,6 +131,7 @@ class DINOv2Wrapper(VisionTransformerWrapper):
             layers: List of layer indices to extract (e.g., [6, 12] for layers 6 and 12).
                     If None, extracts from the last layer only.
                     Layer indices are 1-based (1 to num_layers).
+                    For dinov2_vits14/vitb14: 1-12, vitl14: 1-24, vitg14: 1-40
 
         Returns:
             If layers is None: numpy array of shape (num_patches, dim)
@@ -148,14 +149,22 @@ class DINOv2Wrapper(VisionTransformerWrapper):
                 return tokens.cpu().numpy()
             else:
                 # Extract from multiple specified layers
-                # DINOv2's get_intermediate_layers expects layer indices (0-indexed internally)
-                # We need to call it for each layer separately
+                # get_intermediate_layers(n=N) returns the LAST N layers
+                # So we need to get all layers up to max(layers) and index correctly
+                max_layer = max(layers)
+                all_tokens = self.model.get_intermediate_layers(image_batch, n=max_layer)
+                # all_tokens[i] corresponds to layer (max_layer - len(all_tokens) + 1 + i)
+                # For n=12: all_tokens[0]=layer1, all_tokens[5]=layer6, all_tokens[11]=layer12
+                # For n=6:  all_tokens[0]=layer7, all_tokens[5]=layer12
+                # General: all_tokens[i] = layer (max_layer - n + 1 + i) where n=len(all_tokens)
+
                 result = {}
                 for layer_idx in layers:
-                    # n parameter: get last n layers, so we get all layers up to layer_idx
-                    # then take the last one which corresponds to layer_idx
-                    tokens = self.model.get_intermediate_layers(image_batch, n=layer_idx)
-                    result[layer_idx] = tokens[-1].squeeze().cpu().numpy()
+                    # Convert 1-based layer index to 0-based index in all_tokens
+                    # layer_idx=6, max_layer=12, n=12 -> index = 6-1 = 5
+                    # layer_idx=12, max_layer=12, n=12 -> index = 12-1 = 11
+                    token_index = layer_idx - 1  # 1-based to 0-based
+                    result[layer_idx] = all_tokens[token_index].squeeze().cpu().numpy()
                 return result
 
 
