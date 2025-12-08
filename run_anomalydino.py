@@ -66,6 +66,8 @@ def parse_args():
                         help="Number of rotation augmentations. Common values: 8 (default), 16, 32. Higher values increase memory bank density.")
 
     parser.add_argument("--tag", help="Optional tag for the saving directory.")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Custom output directory for results. If specified, all results go here.")
 
     args = parser.parse_args()
     return args
@@ -96,24 +98,29 @@ if __name__=="__main__":
     for shot in list(args.shots):
         save_examples = args.save_examples
 
-        results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
+        if args.output_dir:
+            # Use custom output directory
+            results_dir = args.output_dir
+        else:
+            results_dir = f"results_{args.dataset}/{args.model_name}_{args.resolution}/{shot}-shot_preprocess={args.preprocess}"
 
-        # Add image preprocessing to results directory name
-        if args.image_preprocessing != "none":
-            results_dir += f"_imgprep={args.image_preprocessing}"
-            if args.image_preprocessing == "clahe":
-                results_dir += f"_clip{args.clahe_clip_limit}_tile{args.clahe_tile_size}"
-            elif args.image_preprocessing == "gamma":
-                results_dir += f"_gamma{args.gamma_value}"
-            elif args.image_preprocessing == "clamp":
-                results_dir += f"_clamp{args.clamp_min_value}-{args.clamp_max_value}"
+            # Add image preprocessing to results directory name
+            if args.image_preprocessing != "none":
+                results_dir += f"_imgprep={args.image_preprocessing}"
+                if args.image_preprocessing == "clahe":
+                    results_dir += f"_clip{args.clahe_clip_limit}_tile{args.clahe_tile_size}"
+                elif args.image_preprocessing == "gamma":
+                    results_dir += f"_gamma{args.gamma_value}"
+                elif args.image_preprocessing == "clamp":
+                    results_dir += f"_clamp{args.clamp_min_value}-{args.clamp_max_value}"
 
-        # Add rotation augmentation to results directory name
-        if args.num_rotations != 8:
-            results_dir += f"_rot{args.num_rotations}"
+            # Add rotation augmentation to results directory name
+            if args.num_rotations != 8:
+                results_dir += f"_rot{args.num_rotations}"
 
-        if args.tag != None:
-            results_dir += "_" + args.tag
+            if args.tag != None:
+                results_dir += "_" + args.tag
+
         plots_dir = results_dir
         os.makedirs(f"{results_dir}", exist_ok=True)
         
