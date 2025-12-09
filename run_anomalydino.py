@@ -75,6 +75,25 @@ def parse_args():
                         choices=["greedy", "random"],
                         help="Coreset sampling method. 'greedy' provides better coverage. Default: greedy")
 
+    # Image preprocessing
+    parser.add_argument("--gamma_value", type=float, default=1.0,
+                        help="Gamma correction value. <1.0 brightens, >1.0 darkens. Default: 1.0 (no change)")
+
+    # Rotation augmentation
+    parser.add_argument("--num_rotations", type=int, default=8,
+                        help="Number of rotation augmentations. Common values: 8 (default), 16, 32")
+
+    # Multiscale options
+    parser.add_argument("--use_multiscale", default=False, action=argparse.BooleanOptionalAction,
+                        help="Use multi-scale feature fusion from multiple DINOv2 layers.")
+    parser.add_argument("--layers", nargs='+', type=int, default=None,
+                        help="Layer indices to extract features from (e.g., --layers 6 12). "
+                             "For dinov2_vits14/vitb14: 1-12, vitl14: 1-24, vitg14: 1-40")
+    parser.add_argument("--layer_weights", nargs='+', type=float, default=None,
+                        help="Weights for each layer (must sum to 1). E.g., --layer_weights 0.3 0.7")
+    parser.add_argument("--normalize_distances", default=True, action=argparse.BooleanOptionalAction,
+                        help="Normalize distances from each layer before fusion (Z-score).")
+
     args = parser.parse_args()
     return args
 
@@ -177,7 +196,13 @@ if __name__=="__main__":
                                                                                 pca_components = args.pca_components,
                                                                                 use_coreset = args.use_coreset,
                                                                                 coreset_ratio = args.coreset_ratio,
-                                                                                coreset_method = args.coreset_method)
+                                                                                coreset_method = args.coreset_method,
+                                                                                gamma_value = args.gamma_value,
+                                                                                num_rotations = args.num_rotations,
+                                                                                use_multiscale = args.use_multiscale,
+                                                                                layers = args.layers,
+                                                                                layer_weights = args.layer_weights,
+                                                                                normalize_distances = args.normalize_distances)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):

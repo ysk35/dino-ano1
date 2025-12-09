@@ -122,15 +122,46 @@ class DINOv2Wrapper(VisionTransformerWrapper):
         return image_tensor, grid_size
     
 
-    def extract_features(self, image_tensor):
+    def extract_features(self, image_tensor, layers=None):
+        """
+        Extract features from specified layers.
+
+        Args:
+            image_tensor: Input image tensor
+            layers: List of layer indices to extract (e.g., [6, 12] for layers 6 and 12).
+                    If None, extracts from the last layer only.
+                    Layer indices are 1-based (1 to num_layers).
+                    For dinov2_vits14/vitb14: 1-12, vitl14: 1-24, vitg14: 1-40
+
+        Returns:
+            If layers is None: numpy array of shape (num_patches, dim)
+            If layers is list: dict mapping layer index to numpy array
+        """
         with torch.inference_mode():
             if self.half_precision:
                 image_batch = image_tensor.unsqueeze(0).half().to(self.device)
             else:
                 image_batch = image_tensor.unsqueeze(0).to(self.device)
 
-            tokens = self.model.get_intermediate_layers(image_batch)[0].squeeze()
-        return tokens.cpu().numpy()
+            if layers is None:
+                # Default: extract from last layer only
+                tokens = self.model.get_intermediate_layers(image_batch)[0].squeeze()
+                return tokens.cpu().numpy()
+            else:
+                # Extract from multiple specified layers
+                # get_intermediate_layers(n=N) returns the LAST N layers
+                # So we need to get all layers up to max(layers) and index correctly
+                max_layer = max(layers)
+                all_tokens = self.model.get_intermediate_layers(image_batch, n=max_layer)
+                # all_tokens[i] corresponds to layer (i+1)
+                # layer_idx=6 -> index = 5, layer_idx=12 -> index = 11
+
+                result = {}
+                for layer_idx in layers:
+                    # Convert 1-based layer index to 0-based index in all_tokens
+                    token_index = layer_idx - 1  # 1-based to 0-based
+                    result[layer_idx] = all_tokens[token_index].squeeze().cpu().numpy()
+                return result
 
 
     def get_embedding_visualization(self, tokens, grid_size, resized_mask=None, normalize=True):

@@ -9,7 +9,7 @@ import time
 import torch
 from sklearn.decomposition import PCA
 
-from src.utils import augment_image, dists2map, plot_ref_images
+from src.utils import augment_image, dists2map, plot_ref_images, apply_gamma_correction
 from src.post_eval import mean_top1p
 
 
@@ -132,7 +132,13 @@ def run_anomaly_detection(
         pca_components = 256,
         use_coreset = False,
         coreset_ratio = 0.1,
-        coreset_method = 'greedy'):
+        coreset_method = 'greedy',
+        gamma_value = 1.0,
+        num_rotations = 8,
+        use_multiscale = False,
+        layers = None,
+        layer_weights = None,
+        normalize_distances = True):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -159,9 +165,23 @@ def run_anomaly_detection(
     - use_coreset: Whether to apply coreset subsampling. Default is False.
     - coreset_ratio: Fraction of patches to keep (0.0-1.0). Default is 0.1.
     - coreset_method: 'greedy' or 'random'. Default is 'greedy'.
+    - gamma_value: Gamma correction value. <1.0 brightens, >1.0 darkens. Default is 1.0 (no change).
+    - num_rotations: Number of rotation augmentations. Default is 8.
+    - use_multiscale: Whether to use multi-scale feature fusion. Default is False.
+    - layers: List of layer indices for multiscale (e.g., [6, 12]). Required if use_multiscale is True.
+    - layer_weights: Weights for each layer (must sum to 1). Required if use_multiscale is True.
+    - normalize_distances: Whether to normalize distances from each layer before fusion. Default is True.
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
+
+    # Validate multiscale parameters
+    if use_multiscale:
+        assert layers is not None, "layers must be specified when use_multiscale is True"
+        assert layer_weights is not None, "layer_weights must be specified when use_multiscale is True"
+        assert len(layers) == len(layer_weights), "layers and layer_weights must have the same length"
+        assert abs(sum(layer_weights) - 1.0) < 1e-6, "layer_weights must sum to 1"
+        print(f"  Multiscale mode: layers={layers}, weights={layer_weights}, normalize={normalize_distances}")
     
     # add 'good' to the anomaly types
     type_anomalies = object_anomalies[object_name]
@@ -171,7 +191,7 @@ def run_anomaly_detection(
     type_anomalies = list(set(type_anomalies))
 
     # Extract reference features
-    features_ref = []
+    features_ref = [] if not use_multiscale else {layer: [] for layer in layers}
     images_ref = []
     masks_ref = []
     vis_backgroud = []
@@ -186,7 +206,7 @@ def run_anomaly_detection(
 
     if len(img_ref_samples) < n_ref_samples:
         print(f"Warning: Not enough reference samples for {object_name}! Only {len(img_ref_samples)} samples available.")
-    
+
     with torch.inference_mode():
         # start measuring time (feature extraction/memory bank set up)
         start_time = time.time()
@@ -195,50 +215,117 @@ def run_anomaly_detection(
             img_ref = f"{img_ref_folder}{img_ref_n}"
             image_ref = cv2.cvtColor(cv2.imread(img_ref, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
+            # Apply gamma correction if specified
+            if gamma_value != 1.0:
+                image_ref = apply_gamma_correction(image_ref, gamma_value)
+
             # augment reference image (if applicable)...
             if rotation:
-                img_augmented = augment_image(image_ref)
+                img_augmented = augment_image(image_ref, num_rotations=num_rotations)
             else:
                 img_augmented = [image_ref]
+
             for i in range(len(img_augmented)):
-                image_ref = img_augmented[i]
-                image_ref_tensor, grid_size1 = model.prepare_image(image_ref)
-                features_ref_i = model.extract_features(image_ref_tensor)
-                
-                # compute background mask and discard background patches
-                mask_ref = model.compute_background_mask(features_ref_i, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
-                features_ref.append(features_ref_i[mask_ref])
-                if save_examples:
-                    images_ref.append(image_ref)
-                    vis_image_background = model.get_embedding_visualization(features_ref_i, grid_size1, mask_ref)
-                    masks_ref.append(mask_ref)
-                    vis_backgroud.append(vis_image_background)
-        
-        features_ref = np.concatenate(features_ref, axis=0).astype('float32')
-        print(f"  Memory bank: {features_ref.shape[0]} patches, {features_ref.shape[1]}D")
+                image_ref_aug = img_augmented[i]
+                image_ref_tensor, grid_size1 = model.prepare_image(image_ref_aug)
 
-        # Apply PCA Whitening if enabled
-        pca_model = None
-        if use_pca_whitening:
-            pca_model, features_ref = apply_pca_whitening(features_ref, n_components=pca_components)
+                if use_multiscale:
+                    # Extract features from multiple layers
+                    features_dict = model.extract_features(image_ref_tensor, layers=layers)
+                    # Use last layer for mask computation
+                    features_for_mask = features_dict[layers[-1]]
+                    mask_ref = model.compute_background_mask(features_for_mask, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
+                    for layer in layers:
+                        features_ref[layer].append(features_dict[layer][mask_ref])
+                    if save_examples:
+                        images_ref.append(image_ref_aug)
+                        vis_image_background = model.get_embedding_visualization(features_for_mask, grid_size1, mask_ref)
+                        masks_ref.append(mask_ref)
+                        vis_backgroud.append(vis_image_background)
+                else:
+                    features_ref_i = model.extract_features(image_ref_tensor)
+                    # compute background mask and discard background patches
+                    mask_ref = model.compute_background_mask(features_ref_i, grid_size1, threshold=10, masking_type=(mask_ref_images and masking))
+                    features_ref.append(features_ref_i[mask_ref])
+                    if save_examples:
+                        images_ref.append(image_ref_aug)
+                        vis_image_background = model.get_embedding_visualization(features_ref_i, grid_size1, mask_ref)
+                        masks_ref.append(mask_ref)
+                        vis_backgroud.append(vis_image_background)
 
-        # Apply Coreset Subsampling if enabled
-        if use_coreset:
-            features_ref, _ = apply_coreset_subsampling(
-                features_ref, sampling_ratio=coreset_ratio, method=coreset_method
-            )
+        # Build kNN index (single or multi-scale)
+        if use_multiscale:
+            knn_indices = {}
+            layer_norm_params = {}  # Store normalization parameters for each layer
+            if not faiss_on_cpu:
+                res = faiss.StandardGpuResources()
+            for layer in layers:
+                layer_features = np.concatenate(features_ref[layer], axis=0).astype('float32')
+                if faiss_on_cpu:
+                    knn_indices[layer] = faiss.IndexFlatL2(layer_features.shape[1])
+                else:
+                    knn_indices[layer] = faiss.GpuIndexFlatL2(res, layer_features.shape[1])
+                if knn_metric == "L2_normalized":
+                    faiss.normalize_L2(layer_features)
+                knn_indices[layer].add(layer_features)
+                print(f"    Layer {layer}: {layer_features.shape[0]} patches, dim={layer_features.shape[1]}")
 
-        if faiss_on_cpu:
-            # similarity search on CPU
-            knn_index = faiss.IndexFlatL2(features_ref.shape[1])
+            # Compute normalization parameters from memory bank (self-distance distribution)
+            if normalize_distances:
+                print("    Computing normalization parameters from memory bank...")
+                for layer in layers:
+                    # Sample features from memory bank to estimate distance distribution
+                    n_samples = min(1000, knn_indices[layer].ntotal)
+                    sample_indices = np.random.choice(knn_indices[layer].ntotal, n_samples, replace=False)
+
+                    # Get sample features by reconstructing from index
+                    layer_features_all = np.concatenate(features_ref[layer], axis=0).astype('float32')
+                    if knn_metric == "L2_normalized":
+                        faiss.normalize_L2(layer_features_all)
+                    sample_features = layer_features_all[sample_indices]
+
+                    # Search for 2-NN (exclude self which has distance 0)
+                    distances, _ = knn_indices[layer].search(sample_features, k=2)
+                    # Use second nearest neighbor (first is self with distance ~0)
+                    nn_distances = distances[:, 1]
+                    if knn_metric == "L2_normalized":
+                        nn_distances = nn_distances / 2  # Convert to cosine distance
+                    else:
+                        nn_distances = np.sqrt(nn_distances)
+
+                    # Compute mean and std for normalization
+                    layer_norm_params[layer] = {
+                        'mean': nn_distances.mean(),
+                        'std': nn_distances.std()
+                    }
+                    print(f"    Layer {layer} norm params: mean={layer_norm_params[layer]['mean']:.4f}, std={layer_norm_params[layer]['std']:.4f}")
         else:
-            # similarity search on GPU
-            res = faiss.StandardGpuResources()
-            knn_index = faiss.GpuIndexFlatL2(res, features_ref.shape[1])
+            features_ref = np.concatenate(features_ref, axis=0).astype('float32')
+            print(f"  Memory bank: {features_ref.shape[0]} patches, {features_ref.shape[1]}D")
 
-        if knn_metric == "L2_normalized":
-            faiss.normalize_L2(features_ref)
-        knn_index.add(features_ref)
+        # Apply PCA Whitening if enabled (single-scale only)
+        pca_model = None
+        if not use_multiscale:
+            if use_pca_whitening:
+                pca_model, features_ref = apply_pca_whitening(features_ref, n_components=pca_components)
+
+            # Apply Coreset Subsampling if enabled
+            if use_coreset:
+                features_ref, _ = apply_coreset_subsampling(
+                    features_ref, sampling_ratio=coreset_ratio, method=coreset_method
+                )
+
+            if faiss_on_cpu:
+                # similarity search on CPU
+                knn_index = faiss.IndexFlatL2(features_ref.shape[1])
+            else:
+                # similarity search on GPU
+                res = faiss.StandardGpuResources()
+                knn_index = faiss.GpuIndexFlatL2(res, features_ref.shape[1])
+
+            if knn_metric == "L2_normalized":
+                faiss.normalize_L2(features_ref)
+            knn_index.add(features_ref)
 
         # end measuring time (for memory bank set up; in seconds, same for all test samples of this object)
         time_memorybank = time.time() - start_time
@@ -266,40 +353,91 @@ def run_anomaly_detection(
 
                 # Extract test features
                 image_test = cv2.cvtColor(cv2.imread(image_test_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+                # Apply gamma correction if specified
+                if gamma_value != 1.0:
+                    image_test = apply_gamma_correction(image_test, gamma_value)
+
                 image_tensor2, grid_size2 = model.prepare_image(image_test)
-                features2 = model.extract_features(image_tensor2)
 
-                # Compute background mask
-                if masking:
-                    mask2 = model.compute_background_mask(features2, grid_size2, threshold=10, masking_type=masking)
+                if use_multiscale:
+                    # Extract features from multiple layers
+                    features_dict2 = model.extract_features(image_tensor2, layers=layers)
+                    features_for_mask2 = features_dict2[layers[-1]]
+
+                    # Compute background mask using last layer
+                    if masking:
+                        mask2 = model.compute_background_mask(features_for_mask2, grid_size2, threshold=10, masking_type=masking)
+                    else:
+                        mask2 = np.ones(features_for_mask2.shape[0], dtype=bool)
+                    if save_examples and idx < 3:
+                        vis_image_test_background = model.get_embedding_visualization(features_for_mask2, grid_size2, mask2)
+
+                    # Compute distances for each layer and fuse
+                    fused_distances = np.zeros(mask2.sum(), dtype=float)
+                    for layer_idx, layer in enumerate(layers):
+                        layer_features = features_dict2[layer][mask2].astype('float32')
+
+                        if knn_metric == "L2":
+                            layer_distances, _ = knn_indices[layer].search(layer_features, k=knn_neighbors)
+                            if knn_neighbors > 1:
+                                layer_distances = layer_distances.mean(axis=1)
+                            layer_distances = np.sqrt(layer_distances)
+                        elif knn_metric == "L2_normalized":
+                            faiss.normalize_L2(layer_features)
+                            layer_distances, _ = knn_indices[layer].search(layer_features, k=knn_neighbors)
+                            if knn_neighbors > 1:
+                                layer_distances = layer_distances.mean(axis=1)
+                            layer_distances = layer_distances / 2  # cosine distance
+
+                        # Normalize distances if enabled
+                        if normalize_distances and layer in layer_norm_params:
+                            mean_d = layer_norm_params[layer]['mean']
+                            std_d = layer_norm_params[layer]['std']
+                            if std_d > 0:
+                                layer_distances = (layer_distances - mean_d) / std_d
+
+                        # Apply weight and accumulate
+                        fused_distances += layer_weights[layer_idx] * layer_distances.squeeze()
+
+                    output_distances = np.zeros_like(mask2, dtype=float)
+                    output_distances[mask2] = fused_distances
+                    distances = fused_distances  # For visualization
                 else:
-                    mask2 = np.ones(features2.shape[0], dtype=bool)
-                if save_examples and idx < 3:
-                    vis_image_test_background = model.get_embedding_visualization(features2, grid_size2, mask2)
+                    features2 = model.extract_features(image_tensor2)
 
-                # Discard irrelevant features
-                features2 = features2[mask2]
+                    # Compute background mask
+                    if masking:
+                        mask2 = model.compute_background_mask(features2, grid_size2, threshold=10, masking_type=masking)
+                    else:
+                        mask2 = np.ones(features2.shape[0], dtype=bool)
+                    if save_examples and idx < 3:
+                        vis_image_test_background = model.get_embedding_visualization(features2, grid_size2, mask2)
 
-                # Apply PCA transformation if enabled (using fitted model from training)
-                if use_pca_whitening and pca_model is not None:
-                    features2 = pca_model.transform(features2).astype('float32')
+                    # Discard irrelevant features
+                    features2 = features2[mask2]
 
-                # Compute distances to nearest neighbors in M
-                if knn_metric == "L2":
-                    distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
-                    if knn_neighbors > 1:
-                        distances = distances.mean(axis=1)
-                    distances = np.sqrt(distances)
+                    # Apply PCA transformation if enabled (using fitted model from training)
+                    if use_pca_whitening and pca_model is not None:
+                        features2 = pca_model.transform(features2).astype('float32')
 
-                elif knn_metric == "L2_normalized":
-                    faiss.normalize_L2(features2)
-                    distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
-                    if knn_neighbors > 1:
-                        distances = distances.mean(axis=1)
-                    distances = distances / 2   # equivalent to cosine distance (1 - cosine similarity)
+                    # Compute distances to nearest neighbors in M
+                    if knn_metric == "L2":
+                        distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances = distances.mean(axis=1)
+                        distances = np.sqrt(distances)
 
-                output_distances = np.zeros_like(mask2, dtype=float)
-                output_distances[mask2] = distances.squeeze()
+                    elif knn_metric == "L2_normalized":
+                        faiss.normalize_L2(features2)
+                        distances, match2to1 = knn_index.search(features2, k = knn_neighbors)
+                        if knn_neighbors > 1:
+                            distances = distances.mean(axis=1)
+                        distances = distances / 2   # equivalent to cosine distance (1 - cosine similarity)
+
+                    output_distances = np.zeros_like(mask2, dtype=float)
+                    output_distances[mask2] = distances.squeeze()
+
                 d_masked = output_distances.reshape(grid_size2)
 
                 # Apply local smoothing if enabled

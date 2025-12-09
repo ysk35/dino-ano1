@@ -4,12 +4,45 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 
 
-def augment_image(img_ref, augmentation = "rotate", angles = [0, 45, 90, 135, 180, 225, 270, 315]):
+def apply_gamma_correction(img, gamma_value=1.0):
     """
-    Simply augmentation of images, currently just rotation.
+    Apply gamma correction to image.
+
+    Parameters:
+    - img: Input image (RGB format, numpy array)
+    - gamma_value: Gamma value. <1.0 brightens, >1.0 darkens. Default: 1.0 (no change)
+
+    Returns:
+    - Gamma corrected image
+    """
+    if gamma_value == 1.0:
+        return img
+
+    # Normalize to [0, 1], apply gamma correction, then scale back
+    img_gamma = np.power(img / 255.0, gamma_value) * 255.0
+    return img_gamma.astype(np.uint8)
+
+
+def augment_image(img_ref, augmentation="rotate", angles=None, num_rotations=8):
+    """
+    Data augmentation for images, supporting flexible rotation.
+
+    Parameters:
+    - img_ref: Reference image (numpy array)
+    - augmentation: Augmentation method (default: "rotate")
+    - angles: List of rotation angles. If None, generates evenly spaced angles
+    - num_rotations: Number of rotations to generate (default: 8)
+                     Common values: 8, 16, 32 for increasing memory bank density
+
+    Returns:
+    - List of augmented images
     """
     imgs = []
     if augmentation == "rotate":
+        # If angles not provided, generate evenly spaced angles
+        if angles is None:
+            angles = [i * (360 / num_rotations) for i in range(num_rotations)]
+
         for angle in angles:
             imgs.append(rotate_image(img_ref, angle))
     return imgs
