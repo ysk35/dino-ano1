@@ -1,12 +1,13 @@
 import argparse
 import os
-from argparse import ArgumentParser, Action 
+from argparse import ArgumentParser, Action
 import yaml
+import json
 from tqdm import trange
 
 import csv
 
-from src.utils import get_dataset_info 
+from src.utils import get_dataset_info
 from src.detection import run_anomaly_detection
 from src.post_eval import eval_finished_run
 from src.visualize import create_sample_plots
@@ -119,12 +120,14 @@ if __name__=="__main__":
     
         for seed in seeds:
             print(f"=========== Shot = {shot}, Seed = {seed} ===========")
-            
+
             if os.path.exists(f"{results_dir}/metrics_seed={seed}.json"):
                 print(f"Results for shot {shot}, seed {seed} already exist. Skipping.")
                 continue
             else:
                 timeit_file = results_dir + "/time_measurements.csv"
+                adaptive_thresholds = {}  # Store adaptive thresholds per object
+
                 with open(timeit_file, 'w', newline='') as file:
                     writer = csv.writer(file)
                     writer.writerow(["Object", "Sample", "Anomaly_Score", "MemoryBank_Time", "Inference_Time"])
@@ -164,9 +167,10 @@ if __name__=="__main__":
                                                                                 feature_layers = args.feature_layers,
                                                                                 layer_weights = args.layer_weights)
 
-                        # Log adaptive threshold if computed
+                        # Log and store adaptive threshold if computed
                         if adaptive_threshold is not None:
                             print(f"  → Adaptive threshold for {object_name}: {adaptive_threshold:.4f}")
+                            adaptive_thresholds[object_name] = float(adaptive_threshold)
 
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
@@ -182,16 +186,24 @@ if __name__=="__main__":
                     inference_times = [float(row[4]) for row in reader]
                 print(f"Finished AD for {len(objects)} objects (seed {seed}), mean inference time: {sum(inference_times)/len(inference_times):.5f} s/sample")
 
+                # Save adaptive thresholds to JSON file if computed
+                if adaptive_thresholds:
+                    threshold_file = f"{results_dir}/adaptive_thresholds_seed={seed}.json"
+                    with open(threshold_file, 'w') as f:
+                        json.dump(adaptive_thresholds, f, indent=4)
+                    print(f"Saved adaptive thresholds to {threshold_file}")
+
                 # evaluate all finished runs and create sample anomaly maps for inspection
                 print(f"=========== Evaluate seed = {seed} ===========")
-                eval_finished_run(args.dataset, 
-                                args.data_root, 
-                                anomaly_maps_dir = results_dir + f"/anomaly_maps/seed={seed}", 
+                eval_finished_run(args.dataset,
+                                args.data_root,
+                                anomaly_maps_dir = results_dir + f"/anomaly_maps/seed={seed}",
                                 output_dir = results_dir,
                                 seed = seed,
                                 pro_integration_limit = 0.3,
                                 eval_clf = args.eval_clf,
-                                eval_segm = args.eval_segm)
+                                eval_segm = args.eval_segm,
+                                adaptive_thresholds = adaptive_thresholds if adaptive_thresholds else None)
                 
                 if save_examples:
                     create_sample_plots(results_dir,

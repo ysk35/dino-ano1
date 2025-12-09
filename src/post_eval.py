@@ -411,7 +411,7 @@ def eval_segmentation(gt_filenames, prediction_filenames, pro_integration_limit=
     return au_pro, auroc_px, f1_px
 
 
-def eval_classification(gt_filenames, prediction_filenames, aggregation_statistics = "meantop1p"):
+def eval_classification(gt_filenames, prediction_filenames, aggregation_statistics = "meantop1p", adaptive_threshold = None):
     # Read all ground truth and anomaly images.
     ground_truth = []
     predictions = []
@@ -422,7 +422,7 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
     print("Read ground truth files and corresponding predictions...")
     for (gt_name, pred_name) in tqdm(zip(gt_filenames, prediction_filenames),
                                      total=len(gt_filenames)):
-        prediction = np.load(pred_name + '.npy') 
+        prediction = np.load(pred_name + '.npy')
         predictions.append(prediction)
         file_paths.append(pred_name)  # ファイルパス保存
 
@@ -432,13 +432,13 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
             # img = "data/mvtec_anomaly_detection/" + "/".join(img) + ".png"
             img = "data/VisA_pytorch/1cls/" + "/".join(img) + ".JPG"
             image_test = cv2.imread(img, cv2.IMREAD_GRAYSCALE)
-            gt_img_size.append(image_test.shape)        
+            gt_img_size.append(image_test.shape)
 
         if gt_name is not None:
             ground_truth.append(np.asarray(Image.open(gt_name)))
         else:
             ground_truth.append(np.zeros(prediction.shape))
-    
+
     # derive binary labels (0 = anomaly free, 1 = anomalous)
     binary_labels = [int(np.any(x > 0)) for x in ground_truth]
     del ground_truth
@@ -459,17 +459,35 @@ def eval_classification(gt_filenames, prediction_filenames, aggregation_statisti
     # Compute image-level Average Precision (AP)
     ap_clf = average_precision_score(binary_labels, predictions)
     print(f"Average Precision (image-level): {ap_clf}", end=" -- ")
-  
+
     # Compute image_level F1 score
-    precisions, recalls, thresholds = precision_recall_curve(binary_labels, predictions)
-    f1_scores = (2 * precisions * recalls) / (precisions + recalls)
-    f1_clf = np.max(f1_scores[np.isfinite(f1_scores)])
-    
-    print(f"F1 (image-level): {f1_clf}")
-    
+    if adaptive_threshold is not None:
+        # Use adaptive threshold for F1 calculation
+        binary_predictions = [1 if p > adaptive_threshold else 0 for p in predictions]
+        from sklearn.metrics import precision_score, recall_score
+        precision = precision_score(binary_labels, binary_predictions, zero_division=0)
+        recall = recall_score(binary_labels, binary_predictions, zero_division=0)
+        if precision + recall > 0:
+            f1_clf = 2 * precision * recall / (precision + recall)
+        else:
+            f1_clf = 0.0
+        print(f"F1 (image-level, adaptive threshold={adaptive_threshold:.4f}): {f1_clf}")
+
+        # Also compute optimal F1 for comparison
+        precisions_opt, recalls_opt, _ = precision_recall_curve(binary_labels, predictions)
+        f1_scores_opt = (2 * precisions_opt * recalls_opt) / (precisions_opt + recalls_opt)
+        f1_optimal = np.max(f1_scores_opt[np.isfinite(f1_scores_opt)])
+        print(f"  (Optimal F1 for comparison: {f1_optimal:.4f})")
+    else:
+        # Use optimal threshold (original behavior)
+        precisions, recalls, thresholds = precision_recall_curve(binary_labels, predictions)
+        f1_scores = (2 * precisions * recalls) / (precisions + recalls)
+        f1_clf = np.max(f1_scores[np.isfinite(f1_scores)])
+        print(f"F1 (image-level): {f1_clf}")
+
     # フォルダ別ミス分析を追加
-    analyze_folder_errors(binary_labels, predictions, file_paths)
-    
+    analyze_folder_errors(binary_labels, predictions, file_paths, threshold=adaptive_threshold)
+
     return auroc_clf, ap_clf, f1_clf
 
 
@@ -481,7 +499,7 @@ def get_objects_from_dataset(dataset):
     return objects
     
 
-def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, seed = None, pro_integration_limit = 0.3, eval_clf = True, eval_segm = False, delete_tiff_files = True, aggregation_statistics = "meantop1p"):
+def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, seed = None, pro_integration_limit = 0.3, eval_clf = True, eval_segm = False, delete_tiff_files = True, aggregation_statistics = "meantop1p", adaptive_thresholds = None):
     """
     Evaluate the results of a finished run on the MVTec AD dataset.
     Arguments:
@@ -494,6 +512,7 @@ def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, s
     - eval_clf: Whether to evaluate classification performance.
     - eval_segm: Whether to evaluate segmentation performance.
     - delete_tiff_files: Whether tiff files are deleted after evaluation (default True)
+    - adaptive_thresholds: Dict mapping object names to adaptive thresholds (optional)
     """
 
     # Parse the filenames of all ground truth and corresponding anomaly
@@ -545,16 +564,25 @@ def eval_finished_run(dataset, dataset_base_dir, anomaly_maps_dir, output_dir, s
             f1_px_ls.append(f1_px)
             
         if eval_clf:
-        # Evaluate classification performance
+            # Get adaptive threshold for this object if available
+            obj_threshold = None
+            if adaptive_thresholds is not None and obj in adaptive_thresholds:
+                obj_threshold = adaptive_thresholds[obj]
+                print(f"  Using adaptive threshold: {obj_threshold:.4f}")
+
+            # Evaluate classification performance
             auroc_clf, ap_clf, f1_clf = \
                 eval_classification(
                     gt_filenames,
                     prediction_filenames,
-                    aggregation_statistics = aggregation_statistics)
+                    aggregation_statistics = aggregation_statistics,
+                    adaptive_threshold = obj_threshold)
 
             evaluation_dict[obj]['classification_AUROC'] = auroc_clf
             evaluation_dict[obj]['classification_AP'] = ap_clf
             evaluation_dict[obj]['classification_F1'] = f1_clf
+            if obj_threshold is not None:
+                evaluation_dict[obj]['adaptive_threshold'] = obj_threshold
 
             # Keep track of the mean performance measures.
             auroc_clf_ls.append(auroc_clf)
