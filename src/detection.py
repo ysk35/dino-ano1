@@ -30,7 +30,8 @@ def run_anomaly_detection(
         save_tiffs = False,
         use_multiscale = False,
         layers = None,
-        layer_weights = None):
+        layer_weights = None,
+        normalize_distances = True):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -52,6 +53,8 @@ def run_anomaly_detection(
     - use_multiscale: Whether to use multi-scale feature fusion. Default is False.
     - layers: List of layer indices to extract features from (e.g., [6, 12]). Required if use_multiscale is True.
     - layer_weights: List of weights for each layer (e.g., [0.3, 0.7]). Must sum to 1. Required if use_multiscale is True.
+    - normalize_distances: Whether to normalize distances from each layer before fusion. Default is True.
+                          This ensures each layer contributes equally regardless of their distance scales.
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
@@ -62,7 +65,7 @@ def run_anomaly_detection(
         assert layer_weights is not None, "layer_weights must be specified when use_multiscale is True"
         assert len(layers) == len(layer_weights), "layers and layer_weights must have the same length"
         assert abs(sum(layer_weights) - 1.0) < 1e-6, "layer_weights must sum to 1"
-        print(f"  Multiscale mode: layers={layers}, weights={layer_weights}")
+        print(f"  Multiscale mode: layers={layers}, weights={layer_weights}, normalize={normalize_distances}")
 
     # add 'good' to the anomaly types
     type_anomalies = object_anomalies[object_name]
@@ -132,6 +135,7 @@ def run_anomaly_detection(
         # Build kNN index (single or multi-scale)
         if use_multiscale:
             knn_indices = {}
+            layer_norm_params = {}  # Store normalization parameters for each layer
             if not faiss_on_cpu:
                 res = faiss.StandardGpuResources()
             for layer in layers:
@@ -144,6 +148,36 @@ def run_anomaly_detection(
                     faiss.normalize_L2(layer_features)
                 knn_indices[layer].add(layer_features)
                 print(f"    Layer {layer}: {layer_features.shape[0]} patches, dim={layer_features.shape[1]}")
+
+            # Compute normalization parameters from memory bank (self-distance distribution)
+            if normalize_distances:
+                print("    Computing normalization parameters from memory bank...")
+                for layer in layers:
+                    # Sample features from memory bank to estimate distance distribution
+                    n_samples = min(1000, knn_indices[layer].ntotal)
+                    sample_indices = np.random.choice(knn_indices[layer].ntotal, n_samples, replace=False)
+
+                    # Get sample features by reconstructing from index
+                    layer_features_all = np.concatenate(features_ref[layer], axis=0).astype('float32')
+                    if knn_metric == "L2_normalized":
+                        faiss.normalize_L2(layer_features_all)
+                    sample_features = layer_features_all[sample_indices]
+
+                    # Search for 2-NN (exclude self which has distance 0)
+                    distances, _ = knn_indices[layer].search(sample_features, k=2)
+                    # Use second nearest neighbor (first is self with distance ~0)
+                    nn_distances = distances[:, 1]
+                    if knn_metric == "L2_normalized":
+                        nn_distances = nn_distances / 2  # Convert to cosine distance
+                    else:
+                        nn_distances = np.sqrt(nn_distances)
+
+                    # Compute mean and std for normalization
+                    layer_norm_params[layer] = {
+                        'mean': nn_distances.mean(),
+                        'std': nn_distances.std()
+                    }
+                    print(f"    Layer {layer} norm params: mean={layer_norm_params[layer]['mean']:.4f}, std={layer_norm_params[layer]['std']:.4f}")
         else:
             features_ref = np.concatenate(features_ref, axis=0).astype('float32')
             if faiss_on_cpu:
@@ -216,8 +250,16 @@ def run_anomaly_detection(
                                 layer_distances = layer_distances.mean(axis=1)
                             layer_distances = layer_distances / 2
 
+                        layer_distances = layer_distances.squeeze()
+
+                        # Normalize distances before fusion (Z-score normalization)
+                        if normalize_distances:
+                            mean = layer_norm_params[layer]['mean']
+                            std = layer_norm_params[layer]['std']
+                            layer_distances = (layer_distances - mean) / (std + 1e-8)
+
                         # Weighted fusion
-                        fused_distances += layer_weights[layer_idx] * layer_distances.squeeze()
+                        fused_distances += layer_weights[layer_idx] * layer_distances
 
                     distances = fused_distances
                 else:

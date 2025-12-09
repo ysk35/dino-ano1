@@ -59,6 +59,9 @@ def parse_args():
                              "For dinov2_vits14/vitb14: 1-12, vitl14: 1-24, vitg14: 1-40")
     parser.add_argument("--layer_weights", nargs='+', type=float, default=None,
                         help="Weights for each layer (must sum to 1). E.g., --layer_weights 0.3 0.7")
+    parser.add_argument("--normalize_distances", default=True, action=argparse.BooleanOptionalAction,
+                        help="Normalize distances from each layer before fusion (Z-score). "
+                             "This ensures each layer contributes proportionally regardless of scale.")
 
     args = parser.parse_args()
     return args
@@ -117,7 +120,7 @@ if __name__=="__main__":
             print("Warning: Running similarity search on CPU. Consider using faiss-gpu for faster inference.")
 
         if args.use_multiscale:
-            print(f"Multiscale mode: layers={args.layers}, weights={args.layer_weights}")
+            print(f"Multiscale mode: layers={args.layers}, weights={args.layer_weights}, normalize={args.normalize_distances}")
 
         print("Results will be saved to", results_dir)
     
@@ -164,7 +167,8 @@ if __name__=="__main__":
                                                                                 save_tiffs = args.eval_segm,      # save anomaly maps as tiffs for segmentation evaluation
                                                                                 use_multiscale = args.use_multiscale,
                                                                                 layers = args.layers,
-                                                                                layer_weights = args.layer_weights)
+                                                                                layer_weights = args.layer_weights,
+                                                                                normalize_distances = args.normalize_distances)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
