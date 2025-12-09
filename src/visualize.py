@@ -54,7 +54,8 @@ def infer_vmax(exp_path, objects):
                 max_score = np.load(f"{exp_path}/{object_name}/test/good/{test_file_good}").max()
                 current_max = max(current_max, max_score)
 
-        vmax[object_name] = current_max * 1.0
+        # Ensure vmax is never 0 to avoid matplotlib error
+        vmax[object_name] = max(current_max * 1.0, 1e-6)
     return vmax
 
 

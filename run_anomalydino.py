@@ -204,13 +204,14 @@ if __name__=="__main__":
                                 eval_clf = args.eval_clf,
                                 eval_segm = args.eval_segm)
                 
-                create_sample_plots(results_dir, 
-                                    anomaly_maps_dir = results_dir + f"/anomaly_maps/seed={seed}", 
-                                    seed = seed,
-                                    dataset = args.dataset, 
-                                    data_root = args.data_root)
-            
-                # deactivate creation of examples for the next seeds...
-                save_examples = False 
+                if save_examples:
+                    create_sample_plots(results_dir,
+                                        anomaly_maps_dir = results_dir + f"/anomaly_maps/seed={seed}",
+                                        seed = seed,
+                                        dataset = args.dataset,
+                                        data_root = args.data_root)
+
+                    # deactivate creation of examples for the next seeds...
+                    save_examples = False 
 
     print("Finished and evaluated all runs!")
