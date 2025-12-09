@@ -49,7 +49,8 @@ def parse_args():
 
     # Image preprocessing arguments
     parser.add_argument("--image_preprocessing", type=str, default="none",
-                        help="Image preprocessing method. Choose from ['none', 'clahe', 'gamma', 'sharpening', 'clamp']. "
+                        help="Image preprocessing method. Choose from ['none', 'clahe', 'gamma', 'sharpening', 'clamp', "
+                             "'histeq', 'bilateral', 'gaussian', 'unsharp', 'denoise', 'normalize']. "
                              "Can combine with '+' (e.g., 'gamma+clahe' applies gamma first, then clahe).")
     parser.add_argument("--clahe_clip_limit", type=float, default=2.0,
                         help="Clip limit for CLAHE preprocessing.")
@@ -61,6 +62,21 @@ def parse_args():
                         help="Minimum value for clamp preprocessing.")
     parser.add_argument("--clamp_max_value", type=int, default=255,
                         help="Maximum value for clamp preprocessing.")
+    # Additional preprocessing parameters
+    parser.add_argument("--bilateral_d", type=int, default=9,
+                        help="Diameter of pixel neighborhood for bilateral filter.")
+    parser.add_argument("--bilateral_sigma_color", type=float, default=75,
+                        help="Filter sigma in the color space for bilateral filter.")
+    parser.add_argument("--bilateral_sigma_space", type=float, default=75,
+                        help="Filter sigma in the coordinate space for bilateral filter.")
+    parser.add_argument("--gaussian_kernel", type=int, default=5,
+                        help="Kernel size for Gaussian blur (must be odd).")
+    parser.add_argument("--unsharp_amount", type=float, default=1.5,
+                        help="Amount of sharpening for unsharp mask.")
+    parser.add_argument("--unsharp_kernel", type=int, default=5,
+                        help="Kernel size for unsharp mask blur.")
+    parser.add_argument("--denoise_h", type=float, default=10,
+                        help="Filter strength for non-local means denoising.")
 
     # Data augmentation arguments
     parser.add_argument("--num_rotations", type=int, default=8,
@@ -164,20 +180,28 @@ if __name__=="__main__":
                             img_tensor, grid_size = model.prepare_image(f"{args.data_root}/{object_name}/train/good/{first_image}")
                             features = model.extract_features(img_tensor)
 
-                        # Prepare preprocessing kwargs based on the selected method
-                        preprocessing_kwargs = {}
-                        if args.image_preprocessing == "clahe":
-                            preprocessing_kwargs = {
-                                "clip_limit": args.clahe_clip_limit,
-                                "tile_grid_size": args.clahe_tile_size
-                            }
-                        elif args.image_preprocessing == "gamma":
-                            preprocessing_kwargs = {"gamma_value": args.gamma_value}
-                        elif args.image_preprocessing == "clamp":
-                            preprocessing_kwargs = {
-                                "min_value": args.clamp_min_value,
-                                "max_value": args.clamp_max_value
-                            }
+                        # Prepare preprocessing kwargs (include all parameters for combinations)
+                        preprocessing_kwargs = {
+                            # CLAHE parameters
+                            "clip_limit": args.clahe_clip_limit,
+                            "tile_grid_size": args.clahe_tile_size,
+                            # Gamma parameters
+                            "gamma_value": args.gamma_value,
+                            # Clamp parameters
+                            "min_value": args.clamp_min_value,
+                            "max_value": args.clamp_max_value,
+                            # Bilateral filter parameters
+                            "bilateral_d": args.bilateral_d,
+                            "bilateral_sigma_color": args.bilateral_sigma_color,
+                            "bilateral_sigma_space": args.bilateral_sigma_space,
+                            # Gaussian blur parameters
+                            "gaussian_kernel": args.gaussian_kernel,
+                            # Unsharp mask parameters
+                            "unsharp_amount": args.unsharp_amount,
+                            "unsharp_kernel": args.unsharp_kernel,
+                            # Denoise parameters
+                            "denoise_h": args.denoise_h,
+                        }
 
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,

@@ -85,6 +85,53 @@ def _apply_single_preprocess(img, method, **kwargs):
         img_clamped = np.clip(img, min_value, max_value)
         return img_clamped.astype(np.uint8)
 
+    elif method == "histeq":
+        # Histogram equalization on L channel (LAB color space)
+        lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+        lab[:, :, 0] = cv2.equalizeHist(lab[:, :, 0])
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+    elif method == "bilateral":
+        # Bilateral filter: noise reduction while preserving edges
+        d = kwargs.get("bilateral_d", 9)  # Diameter of pixel neighborhood
+        sigma_color = kwargs.get("bilateral_sigma_color", 75)
+        sigma_space = kwargs.get("bilateral_sigma_space", 75)
+        return cv2.bilateralFilter(img, d, sigma_color, sigma_space)
+
+    elif method == "gaussian":
+        # Gaussian blur for noise reduction
+        kernel_size = kwargs.get("gaussian_kernel", 5)
+        if kernel_size % 2 == 0:
+            kernel_size += 1  # Must be odd
+        return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
+
+    elif method == "unsharp":
+        # Unsharp masking: sharpen by subtracting blurred version
+        amount = kwargs.get("unsharp_amount", 1.5)
+        kernel_size = kwargs.get("unsharp_kernel", 5)
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        blurred = cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
+        sharpened = cv2.addWeighted(img, 1 + amount, blurred, -amount, 0)
+        return np.clip(sharpened, 0, 255).astype(np.uint8)
+
+    elif method == "denoise":
+        # Non-local means denoising
+        h = kwargs.get("denoise_h", 10)  # Filter strength
+        return cv2.fastNlMeansDenoisingColored(img, None, h, h, 7, 21)
+
+    elif method == "normalize":
+        # Per-channel normalization to [0, 255]
+        result = np.zeros_like(img, dtype=np.float32)
+        for i in range(3):
+            channel = img[:, :, i].astype(np.float32)
+            min_val, max_val = channel.min(), channel.max()
+            if max_val > min_val:
+                result[:, :, i] = (channel - min_val) / (max_val - min_val) * 255
+            else:
+                result[:, :, i] = channel
+        return result.astype(np.uint8)
+
     else:
         raise ValueError(f"Unknown preprocessing method: {method}")
 
