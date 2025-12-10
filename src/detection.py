@@ -9,7 +9,7 @@ import time
 import torch
 from sklearn.decomposition import PCA
 
-from src.utils import augment_image, dists2map, plot_ref_images, apply_gamma_correction
+from src.utils import augment_image, dists2map, plot_ref_images, apply_gamma_correction, preprocess_image
 from src.post_eval import mean_top1p
 
 
@@ -138,7 +138,9 @@ def run_anomaly_detection(
         use_multiscale = False,
         layers = None,
         layer_weights = None,
-        normalize_distances = True):
+        normalize_distances = True,
+        image_preprocessing = "none",
+        preprocessing_kwargs = None):
     """
     Main function to evaluate the anomaly detection performance of a given object/product.
 
@@ -171,9 +173,14 @@ def run_anomaly_detection(
     - layers: List of layer indices for multiscale (e.g., [6, 12]). Required if use_multiscale is True.
     - layer_weights: Weights for each layer (must sum to 1). Required if use_multiscale is True.
     - normalize_distances: Whether to normalize distances from each layer before fusion. Default is True.
+    - image_preprocessing: Image preprocessing method ('none', 'clahe', 'gamma', 'clamp', etc.). Default is 'none'.
+    - preprocessing_kwargs: Additional parameters for preprocessing methods.
     """
 
     assert knn_metric in ["L2", "L2_normalized"]
+
+    if preprocessing_kwargs is None:
+        preprocessing_kwargs = {}
 
     # Validate multiscale parameters
     if use_multiscale:
@@ -215,8 +222,11 @@ def run_anomaly_detection(
             img_ref = f"{img_ref_folder}{img_ref_n}"
             image_ref = cv2.cvtColor(cv2.imread(img_ref, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
-            # Apply gamma correction if specified
-            if gamma_value != 1.0:
+            # Apply image preprocessing if specified
+            if image_preprocessing != "none":
+                image_ref = preprocess_image(image_ref, method=image_preprocessing, **preprocessing_kwargs)
+            # Apply gamma correction if specified (also applies when using "gamma" in image_preprocessing)
+            elif gamma_value != 1.0:
                 image_ref = apply_gamma_correction(image_ref, gamma_value)
 
             # augment reference image (if applicable)...
@@ -354,8 +364,11 @@ def run_anomaly_detection(
                 # Extract test features
                 image_test = cv2.cvtColor(cv2.imread(image_test_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
-                # Apply gamma correction if specified
-                if gamma_value != 1.0:
+                # Apply image preprocessing if specified
+                if image_preprocessing != "none":
+                    image_test = preprocess_image(image_test, method=image_preprocessing, **preprocessing_kwargs)
+                # Apply gamma correction if specified (also applies when using "gamma" in image_preprocessing)
+                elif gamma_value != 1.0:
                     image_test = apply_gamma_correction(image_test, gamma_value)
 
                 image_tensor2, grid_size2 = model.prepare_image(image_test)

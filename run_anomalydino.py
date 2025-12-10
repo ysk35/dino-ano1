@@ -76,8 +76,34 @@ def parse_args():
                         help="Coreset sampling method. 'greedy' provides better coverage. Default: greedy")
 
     # Image preprocessing
+    parser.add_argument("--image_preprocessing", type=str, default="none",
+                        help="Image preprocessing method. Choose from ['none', 'clahe', 'gamma', 'sharpening', 'clamp', "
+                             "'histeq', 'bilateral', 'gaussian', 'unsharp', 'denoise', 'normalize']. "
+                             "Can combine with '+' (e.g., 'gamma+clahe' applies gamma first, then clahe).")
     parser.add_argument("--gamma_value", type=float, default=1.0,
                         help="Gamma correction value. <1.0 brightens, >1.0 darkens. Default: 1.0 (no change)")
+    parser.add_argument("--clahe_clip_limit", type=float, default=2.0,
+                        help="Clip limit for CLAHE preprocessing.")
+    parser.add_argument("--clahe_tile_size", type=int, default=8,
+                        help="Tile grid size for CLAHE preprocessing.")
+    parser.add_argument("--clamp_min_value", type=int, default=0,
+                        help="Minimum value for clamp preprocessing.")
+    parser.add_argument("--clamp_max_value", type=int, default=255,
+                        help="Maximum value for clamp preprocessing.")
+    parser.add_argument("--bilateral_d", type=int, default=9,
+                        help="Diameter of pixel neighborhood for bilateral filter.")
+    parser.add_argument("--bilateral_sigma_color", type=float, default=75,
+                        help="Filter sigma in the color space for bilateral filter.")
+    parser.add_argument("--bilateral_sigma_space", type=float, default=75,
+                        help="Filter sigma in the coordinate space for bilateral filter.")
+    parser.add_argument("--gaussian_kernel", type=int, default=5,
+                        help="Kernel size for Gaussian blur (must be odd).")
+    parser.add_argument("--unsharp_amount", type=float, default=1.5,
+                        help="Amount of sharpening for unsharp mask.")
+    parser.add_argument("--unsharp_kernel", type=int, default=5,
+                        help="Kernel size for unsharp mask blur.")
+    parser.add_argument("--denoise_h", type=float, default=10,
+                        help="Filter strength for non-local means denoising.")
 
     # Rotation augmentation
     parser.add_argument("--num_rotations", type=int, default=8,
@@ -172,6 +198,22 @@ if __name__=="__main__":
                             img_tensor, grid_size = model.prepare_image(f"{args.data_root}/{object_name}/train/good/{first_image}")
                             features = model.extract_features(img_tensor)
                                          
+                        # Build preprocessing kwargs
+                        preprocessing_kwargs = {
+                            "gamma_value": args.gamma_value,
+                            "clip_limit": args.clahe_clip_limit,
+                            "tile_grid_size": args.clahe_tile_size,
+                            "min_value": args.clamp_min_value,
+                            "max_value": args.clamp_max_value,
+                            "bilateral_d": args.bilateral_d,
+                            "bilateral_sigma_color": args.bilateral_sigma_color,
+                            "bilateral_sigma_space": args.bilateral_sigma_space,
+                            "gaussian_kernel": args.gaussian_kernel,
+                            "unsharp_amount": args.unsharp_amount,
+                            "unsharp_kernel": args.unsharp_kernel,
+                            "denoise_h": args.denoise_h,
+                        }
+
                         anomaly_scores, time_memorybank, time_inference = run_anomaly_detection(
                                                                                 model,
                                                                                 object_name,
@@ -202,7 +244,9 @@ if __name__=="__main__":
                                                                                 use_multiscale = args.use_multiscale,
                                                                                 layers = args.layers,
                                                                                 layer_weights = args.layer_weights,
-                                                                                normalize_distances = args.normalize_distances)
+                                                                                normalize_distances = args.normalize_distances,
+                                                                                image_preprocessing = args.image_preprocessing,
+                                                                                preprocessing_kwargs = preprocessing_kwargs)
                         
                         # write anomaly scores and inference times to file
                         for counter, sample in enumerate(anomaly_scores.keys()):
