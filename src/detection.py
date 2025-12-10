@@ -167,10 +167,12 @@ def run_anomaly_detection(
         time_memorybank = time.time() - start_time
 
         # ========== Adaptive Threshold Computation ==========
+        # NOTE: Threshold must be computed at IMAGE-LEVEL (mean_top1p) not patch-level
+        #       because eval_classification uses mean_top1p for predictions
         adaptive_threshold = None
         if use_adaptive_threshold:
             print(f"Computing adaptive threshold from {len(img_ref_samples)} normal samples...")
-            all_patch_scores = []
+            image_level_scores = []  # Store image-level scores, not patch-level
 
             for img_ref_n in tqdm(img_ref_samples, desc="Self-testing normal samples", leave=False):
                 img_ref = f"{img_ref_folder}{img_ref_n}"
@@ -208,16 +210,19 @@ def run_anomaly_detection(
                             distances_ref = distances_ref.mean(axis=1)
                         distances_ref = distances_ref / 2  # cosine distance
 
-                    # Collect patch-level scores
-                    all_patch_scores.extend(distances_ref.flatten())
+                    # Compute IMAGE-LEVEL score (mean_top1p) - same as evaluation
+                    image_score = mean_top1p(distances_ref.flatten())
+                    image_level_scores.append(image_score)
 
-            # Compute adaptive threshold from patch score distribution
-            all_patch_scores = np.array(all_patch_scores)
-            adaptive_threshold = np.percentile(all_patch_scores, adaptive_percentile)
+            # Compute adaptive threshold from IMAGE-LEVEL score distribution
+            image_level_scores = np.array(image_level_scores)
+            adaptive_threshold = np.percentile(image_level_scores, adaptive_percentile)
 
-            print(f"Normal patch score distribution:")
-            print(f"  Mean: {all_patch_scores.mean():.4f}")
-            print(f"  Std:  {all_patch_scores.std():.4f}")
+            print(f"Normal image-level score distribution ({len(image_level_scores)} samples):")
+            print(f"  Mean: {image_level_scores.mean():.4f}")
+            print(f"  Std:  {image_level_scores.std():.4f}")
+            print(f"  Min:  {image_level_scores.min():.4f}")
+            print(f"  Max:  {image_level_scores.max():.4f}")
             print(f"  {adaptive_percentile}th percentile: {adaptive_threshold:.4f}")
             print(f"Adaptive threshold set to: {adaptive_threshold:.4f}")
         # ====================================================
